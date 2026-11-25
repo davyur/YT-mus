@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+bin/
+build/
+.pythonforandroid_build/
+*.db
+*.db-wal
+*.db-shm
+cache_covers/
+.idea/
+.vscode/
