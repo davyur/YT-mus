@@ -777,6 +777,11 @@ class MusicApp(MDApp):
             self.now_label.text = f"Не удалось открыть: {t[2]}"
 
     def play_current(self):
+        if self.bgs_active:
+            self.bgs.resume()
+            self.state.paused = False
+            self.btn_toggle.icon = "pause"
+            return
         if self.state.sound and self.state.sound.state != "play":
             self.state.sound.play()
             self.state.paused = False
