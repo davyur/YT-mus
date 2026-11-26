@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    package="{{ args.package }}"
+    android:versionCode="{{ args.numeric_version }}"
+    android:versionName="{{ args.version }}"
+    android:installLocation="{{ args.install_location }}"
+    android:enableOnBackInvokedCallback="true">
+
+    <uses-sdk android:minSdkVersion="{{ args.min_sdk_version }}"
+              android:targetSdkVersion="{{ args.api }}" />
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+
+    <uses-feature android:glEsVersion="0x00020000" android:required="true" />
+
+    <application
+        android:label="{{ args.name }}"
+        android:icon="@mipmap/icon"
+        android:enableOnBackInvokedCallback="true"
+        android:allowBackup="false"
+        android:hasCode="true">
+
+        <activity
+            android:name="org.kivy.android.PythonActivity"
+            android:label="{{ args.name }}"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|uiMode"
+            android:launchMode="singleTop"
+            android:theme="@android:style/Theme.NoTitleBar"
+            android:exported="true"
+            android:enableOnBackInvokedCallback="true">
+            
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        {% if service %}
+        <service android:name="{{ service.name }}" android:exported="false" />
+        {% endif %}
+    </application>
+</manifest>
