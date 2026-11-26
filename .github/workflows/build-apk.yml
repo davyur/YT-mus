@@ -1,64 +1,53 @@
 name: Build APK
 
 on:
+  push:
+    branches: [ main, master ]
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 90
+    runs-on: ubuntu-latest
+    
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y \
-            autoconf automake libtool libtool-bin pkg-config \
-            cmake ninja-build build-essential \
-            openjdk-17-jdk-headless \
-            zip unzip \
-            libssl-dev libffi-dev zlib1g-dev \
-            git patch wget
-
-      - name: Install Python build tools
-        run: |
-          python -m pip install --upgrade pip
-          pip install buildozer "cython==0.29.33"
-
-      - name: Fix buildozer.spec
-        run: |
-          # Фиксируем ОДНУ версию Python для hostpython3 и python3
-          sed -i -E 's/^requirements\s*=\s*(.*)/requirements = hostpython3==3.12.7,python3==3.12.7,\1/' buildozer.spec
-          
-          # Удаляем дубликаты sdl2/sdl2_ttf/sdl2_image/sdl2_mixer/sqlite3/android (они добавляются автоматически)
-          sed -i -E 's/,sdl2//g; s/,sdl2_ttf//g; s/,sdl2_image//g; s/,sdl2_mixer//g; s/,sqlite3//g; s/,android//g' buildozer.spec
-          
-          # Одна архитектура для скорости
-          sed -i -E 's/^android\.arch\s*=.*/android.archs = arm64-v8a/' buildozer.spec
-          
-          # Стабильные build-tools
-          grep -q sdk_build_tools buildozer.spec || sed -i '/android.ndk = 25b/a android.sdk_build_tools = 33.0.2' buildozer.spec
-          
-          # Отключаем вопрос про root
-          sed -i 's/warn_on_root = 1/warn_on_root = 0/' buildozer.spec
-          
-          echo "=== Итоговый buildozer.spec ==="
-          cat buildozer.spec
-
-      - name: Build APK
-        env:
-          BUILDOZER_WARN_ON_ROOT: 0
-        run: buildozer -v android debug
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: musicapp-apk
-          path: bin/*.apk
-          retention-days: 30
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          openjdk-17-jdk \
+          zip \
+          unzip \
+          autoconf \
+          libtool \
+          pkg-config \
+          zlib1g-dev \
+          libssl-dev \
+          cmake
+        
+    - name: Set up JDK
+      run: |
+        echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
+        echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> $GITHUB_PATH
+        
+    - name: Install Buildozer
+      run: |
+        pip install buildozer cython==0.29.36
+        
+    - name: Build APK
+      run: |
+        buildozer android debug
+        
+    - name: Upload APK artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: musicapp-apk
+        path: bin/*.apk
+        retention-days: 30
