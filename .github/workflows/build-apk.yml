@@ -35,11 +35,9 @@ jobs:
         run: |
           python3 << 'PYEOF'
           import re
-
           with open('buildozer.spec', 'r') as f:
               content = f.read()
 
-          # Фиксируем версии Python и убираем дубликаты
           def fix_requirements(m):
               items = [x.strip() for x in m.group(1).split(',')]
               items = [x for x in items if x not in ('python3', 'hostpython3') and not x.startswith('python3=') and not x.startswith('hostpython3=')]
@@ -55,35 +53,40 @@ jobs:
           if 'android.sdk_build_tools' not in content:
               content = content.replace('android.ndk = 25b', 'android.ndk = 25b\nandroid.sdk_build_tools = 33.0.2')
           content = content.replace('warn_on_root = 1', 'warn_on_root = 0')
-          content = re.sub(r'^log_level\s*=.*', 'log_level = 2', content, flags=re.MULTILINE)
 
           with open('buildozer.spec', 'w') as f:
               f.write(content)
-
-          print("✅ buildozer.spec обновлён!")
+          print("✅ spec обновлён")
           for line in content.splitlines():
-              if line.startswith('requirements') or line.startswith('android.arch'):
+              if line.startswith('requirements'):
                   print(line)
           PYEOF
 
       - name: Build APK
         env:
           BUILDOZER_WARN_ON_ROOT: 0
-        run: buildozer -v android debug 2>&1 | tee build.log
-
-      - name: Show full log on failure
-        if: failure()
         run: |
-          echo "=== ПОСЛЕДНИЕ 500 СТРОК ЛОГА ==="
-          tail -n 500 build.log || tail -n 500 ~/.buildozer/android/platform/build-arm64-v8a/build/logs/*.log 2>/dev/null || true
+          set -o pipefail
+          buildozer -v android debug 2>&1 | tee build.log
+
+      - name: Find APK files
+        if: always()
+        run: |
+          echo "=== Ищем все APK в системе ==="
+          find / -name "*.apk" 2>/dev/null
           echo ""
-          echo "=== ПОИСК ОШИБОК ==="
-          grep -i "error\|failed\|exception" build.log | tail -n 50 || true
+          echo "=== Содержимое папки bin ==="
+          ls -la bin/ 2>/dev/null || echo "Папки bin нет"
+          echo ""
+          echo "=== Последние 300 строк build.log ==="
+          tail -n 300 build.log || echo "build.log пустой"
 
       - name: Upload APK
-        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: musicapp-apk
-          path: bin/*.apk
+          path: |
+            bin/*.apk
+            .buildozer/**/*.apk
+          if-no-files-found: error
           retention-days: 30
