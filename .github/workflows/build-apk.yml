@@ -1,48 +1,31 @@
 name: Build APK
-
 on:
-  push:
-    branches: [ main ]
   workflow_dispatch:
-
 jobs:
   build:
     runs-on: ubuntu-22.04
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-      
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      
-      - name: Install system dependencies
+      - uses: actions/setup-python@v5
+        with: { python-version: '3.11' }
+      - name: System deps
         run: |
           sudo apt-get update -y
-          sudo apt-get install -y \
-            autoconf automake libtool libtool-bin \
-            pkg-config cmake ninja-build \
-            openjdk-17-jdk-headless \
-            zip unzip \
-            libssl-dev libffi-dev \
-            zlib1g-dev \
-            git patch \
-            build-essential
-      
-      - name: Install Python dependencies
+          sudo apt-get install -y libtool libtool-bin autoconf automake pkg-config \
+            cmake ninja-build build-essential openjdk-17-jdk-headless zip unzip \
+            libssl-dev libffi-dev zlib1g-dev git patch
+      - name: Python deps
+        run: pip install buildozer "cython==0.29.33"
+      - name: Patch spec (Python 3.12 + archs + root)
         run: |
-          python -m pip install --upgrade pip
-          pip install buildozer cython==0.29.33
-      
-      - name: Build APK
-        env:
-          BUILDOZER_WARN_ON_ROOT: 0
-        run: |
-          buildozer android debug
-      
+          sed -i -E 's/^requirements *= *python3,([^\n]*)/requirements = python3==3.12.7,\1/' buildozer.spec
+          sed -i -E 's/^android\.arch *=.*/android.archs = arm64-v8a/' buildozer.spec
+          grep -q sdk_build_tools buildozer.spec || sed -i '/android.ndk = 25b/a android.sdk_build_tools = 33.0.2' buildozer.spec
+          sed -i 's/warn_on_root = 1/warn_on_root = 0/' buildozer.spec
+      - name: Build
+        env: { BUILDOZER_WARN_ON_ROOT: '0' }
+        run: buildozer android debug
       - name: Upload APK
         uses: actions/upload-artifact@v4
-        with:
-          name: musicapp-apk
-          path: bin/*.apk
-          retention-days: 30
+        with: { name: musicapp-apk, path: bin/*.apk, retention-days: 30 }
