@@ -30,20 +30,41 @@ jobs:
           python -m pip install --upgrade pip
           pip install buildozer "cython==0.29.33"
 
-      - name: Accept Android SDK licenses
+      - name: Accept ALL Android SDK licenses (везде!)
         run: |
+          # 1. Системный SDK
           mkdir -p $ANDROID_HOME/licenses
           echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > $ANDROID_HOME/licenses/android-sdk-license
           echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > $ANDROID_HOME/licenses/android-sdk-preview-license
           echo -e "\nd56f5187479451eabf01fb78af6dfcb131a6481e" >> $ANDROID_HOME/licenses/android-sdk-license
           echo -e "\n8933bad161af4178b1185d1a37fbf41ea5269c55" >> $ANDROID_HOME/licenses/android-sdk-license
-          echo "✅ Лицензии Android SDK приняты"
+          echo -e "\nf24b57655a11ec27974fff03e86249a5972f6219" >> $ANDROID_HOME/licenses/android-sdk-license
+          echo -e "\n05c211ca760038ce0040502140a00f49e6c28780" >> $ANDROID_HOME/licenses/android-sdk-license
+          
+          # 2. Buildozer SDK (ГЛАВНОЕ! именно здесь ищет Buildozer)
+          BUILDOZER_SDK="$HOME/.buildozer/android/platform/android-sdk"
+          mkdir -p "$BUILDOZER_SDK/licenses"
+          cp $ANDROID_HOME/licenses/* "$BUILDOZER_SDK/licenses/"
+          
+          echo "✅ Лицензии приняты в обоих местах"
+          ls -la "$BUILDOZER_SDK/licenses/"
 
-      - name: Install Android build-tools 33.0.2
+      - name: Install Android build-tools (33.0.2 и 37.0.0)
         run: |
-          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
-          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;33.0.2"
-          echo "✅ build-tools 33.0.2 установлены"
+          # Устанавливаем через системный sdkmanager
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses 2>/dev/null || true
+          $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;33.0.2" "build-tools;37.0.0" "platforms;android-33" "platforms;android-34"
+          
+          # Копируем в Buildozer SDK
+          BUILDOZER_SDK="$HOME/.buildozer/android/platform/android-sdk"
+          mkdir -p "$BUILDOZER_SDK/build-tools"
+          cp -r $ANDROID_HOME/build-tools/33.0.2 "$BUILDOZER_SDK/build-tools/" 2>/dev/null || true
+          cp -r $ANDROID_HOME/build-tools/37.0.0 "$BUILDOZER_SDK/build-tools/" 2>/dev/null || true
+          cp -r $ANDROID_HOME/platforms/android-33 "$BUILDOZER_SDK/platforms/" 2>/dev/null || true
+          cp -r $ANDROID_HOME/platforms/android-34 "$BUILDOZER_SDK/platforms/" 2>/dev/null || true
+          
+          echo "✅ build-tools установлены"
+          ls -la "$BUILDOZER_SDK/build-tools/" 2>/dev/null || echo "build-tools не скопировались"
 
       - name: Fix buildozer.spec
         run: |
