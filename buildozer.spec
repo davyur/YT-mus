@@ -1,44 +1,101 @@
 [app]
 
-; Имя приложения
-title = MusicApp
-package.name = musicapp
-package.domain = org.musicapp
+# Название приложения (отображается в лаунчере)
+title = YTmus
 
+# Имя пакета (влияет на имя APK-файла)
+package.name = ytmus
+
+# Домен пакета (должен быть валидным Java-идентификатором)
+package.domain = org.davyur
+
+# Исходный код приложения
 source.dir = .
-source.include_exts = py,png,jpg,kv,atlas,mp3,ttf,db
-source.include_paths = .,service
 
+# Исходные файлы (по умолчанию все .py)
+source.include_exts = py,png,jpg,kv,atlas,mp3,wav,ogg,json,txt,ttf
+
+# Версия приложения
 version = 1.1.0
 
-; android — ОБЯЗАТЕЛЕН: даёт доступ к android.service (фоновая служба плеера)
-requirements = python3,kivy==2.3.0,kivymd==1.2.0,mutagen,plyer,sdl2,sdl2_ttf,sdl2_image,sdl2_mixer,sqlite3,android,pyjnius
+# Версия кода (увеличивайте при каждом обновлении)
+version.regex = __version__ = '(.*)'
+version.filename = %(source.dir)s/main.py
 
-; Фоновая служба воспроизведения: service/main.py работает в отдельном процессе,
-; музыка играет даже когда приложение свёрнуто (SoundLoader в UI-процессе не умеет фон)
-services = myservice:service/main.py
+# Требования (Python + библиотеки)
+requirements = hostpython3==3.11.9,python3==3.11.9,kivy==2.3.0,kivymd==1.2.0,mutagen,plyer,pyjnius
 
-; Ориентация и разрешение
+# Ориентация экрана
 orientation = portrait
+
+# Поддержка портретной ориентации
+osx.python_version = 3
+osx.kivy_version = 2.3.0
+
+# Разрешения Android
+android.permissions = INTERNET,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,READ_MEDIA_AUDIO,FOREGROUND_SERVICE,POST_NOTIFICATIONS,WAKE_LOCK,FOREGROUND_SERVICE_MEDIA_PLAYBACK
+
+# Минимальная версия Android API
+android.minapi = 21
+
+# Целевая версия Android API
+android.api = 33
+
+# Версия NDK
+android.ndk = 25b
+
+# Версии build-tools (фикс зависания aidl)
+android.sdk_build_tools = 33.0.2
+
+# Архитектура (только arm64-v8a для скорости)
+android.archs = arm64-v8a
+
+# Отключаем предупреждение о root
+warn_on_root = 0
+
+# Кастомный AndroidManifest (решает OnBackInvokedCallback)
+android.manifest = AndroidManifest.tmpl.xml
+
+# Точка входа приложения
+android.entrypoint = org.kivy.android.PythonActivity
+
+# Тема приложения
+android.apptheme = @android:style/Theme.NoTitleBar
+
+# Полноэкранный режим
 fullscreen = 0
 
-; READ_MEDIA_AUDIO обязателен для Android 13+ (API 33), WAKE_LOCK — для фонового звука
-android.permissions = INTERNET,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,READ_MEDIA_AUDIO,FOREGROUND_SERVICE,POST_NOTIFICATIONS,WAKE_LOCK
-android.api = 33
-android.minapi = 21
-android.sdk = 33
-android.ndk = 25b
-android.accept_sdk_license = True
+# Иконка приложения (PNG 512x512)
+icon.filename = icon.png
 
-; Блокировка сна CPU/экрана во время работы службы
-android.wakelock = True
+# Пресплаш (заставка при загрузке)
+# presplash.filename = %(source.dir)s/presplash.png
 
-android.arch = armeabi-v7a, arm64-v8a
+# Сервис (ЗАКОММЕНТИРОВАНО для теста — раскомментируйте после проверки)
+# services = myservice:service/main.py
 
-; Иконка (положите свои icon.png / icon-*.png в project/icon/)
-# android.icon = icon.png
+# Включить AndroidX
+android.enable_androidx = 1
+
+# Копировать библиотеки
+android.copy_libs = 1
+
+# Режим отладки
+android.debug = 1
+
+# Уровень логирования (2 = подробный, 1 = обычный)
+log_level = 2
+
+# Wake lock (не давать экрану гаснуть)
+android.wakelock = 1
+
+# Окно приложения
+android.window = 1
 
 [buildozer]
 
+# Уровень логирования сборщика
 log_level = 2
+
+# Предупреждение при запуске от root
 warn_on_root = 1
