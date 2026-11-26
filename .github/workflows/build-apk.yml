@@ -31,7 +31,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install buildozer "cython==0.29.33"
 
-      - name: Fix buildozer.spec (Python script)
+      - name: Fix buildozer.spec
         run: |
           python3 << 'PYEOF'
           import re
@@ -39,63 +39,46 @@ jobs:
           with open('buildozer.spec', 'r') as f:
               content = f.read()
 
-          # 1. Фиксируем версии Python (hostpython3 + python3 = 3.12.7)
+          # Фиксируем версии Python и убираем дубликаты
           def fix_requirements(m):
               items = [x.strip() for x in m.group(1).split(',')]
-              # Удаляем старые python3/hostpython3
               items = [x for x in items if x not in ('python3', 'hostpython3') and not x.startswith('python3=') and not x.startswith('hostpython3=')]
-              # Удаляем дубликаты sdl2/sdl2_ttf/sdl2_image/sdl2_mixer/sqlite3/android (добавляются автоматически)
               remove = {'sdl2', 'sdl2_ttf', 'sdl2_image', 'sdl2_mixer', 'sqlite3', 'android'}
-              items = [x for x in items if x not in remove]
-              # Удаляем пустые
-              items = [x for x in items if x]
-              # Добавляем фиксированные версии Python в начало
-              items = ['hostpython3==3.12.7', 'python3==3.12.7'] + items
+              items = [x for x in items if x not in remove and x]
+              items = ['hostpython3==3.11.9', 'python3==3.11.9'] + items
               return 'requirements = ' + ','.join(items)
 
           content = re.sub(r'^requirements\s*=\s*(.+)$', fix_requirements, content, flags=re.MULTILINE)
-
-          # 2. Фиксируем архитектуру
           content = re.sub(r'^android\.arch\s*=.*', 'android.archs = arm64-v8a', content, flags=re.MULTILINE)
           if 'android.archs' not in content:
               content = content.replace('[app]', '[app]\nandroid.archs = arm64-v8a', 1)
-
-          # 3. Стабильные build-tools
           if 'android.sdk_build_tools' not in content:
               content = content.replace('android.ndk = 25b', 'android.ndk = 25b\nandroid.sdk_build_tools = 33.0.2')
-
-          # 4. Отключаем вопрос про root
           content = content.replace('warn_on_root = 1', 'warn_on_root = 0')
-
-          # 5. Тихий лог (меньше спама)
           content = re.sub(r'^log_level\s*=.*', 'log_level = 2', content, flags=re.MULTILINE)
 
           with open('buildozer.spec', 'w') as f:
               f.write(content)
 
           print("✅ buildozer.spec обновлён!")
-          print("\n=== requirements ===")
           for line in content.splitlines():
-              if line.startswith('requirements'):
+              if line.startswith('requirements') or line.startswith('android.arch'):
                   print(line)
-                  break
-          print("\n=== android.archs ===")
-          for line in content.splitlines():
-              if line.startswith('android.arch'):
-                  print(line)
-                  break
           PYEOF
 
       - name: Build APK
         env:
           BUILDOZER_WARN_ON_ROOT: 0
-        run: buildozer -v android debug
+        run: buildozer -v android debug 2>&1 | tee build.log
 
-      - name: Show log on failure
+      - name: Show full log on failure
         if: failure()
         run: |
-          echo "=== Последние 200 строк лога ==="
-          tail -n 200 ~/.buildozer/android/platform/build-arm64-v8a/build/logs/*.log 2>/dev/null || true
+          echo "=== ПОСЛЕДНИЕ 500 СТРОК ЛОГА ==="
+          tail -n 500 build.log || tail -n 500 ~/.buildozer/android/platform/build-arm64-v8a/build/logs/*.log 2>/dev/null || true
+          echo ""
+          echo "=== ПОИСК ОШИБОК ==="
+          grep -i "error\|failed\|exception" build.log | tail -n 50 || true
 
       - name: Upload APK
         if: success()
