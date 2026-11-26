@@ -21,7 +21,6 @@ jobs:
           sudo apt-get install -y \
             autoconf automake libtool libtool-bin pkg-config \
             cmake ninja-build build-essential \
-            openjdk-17-jdk-headless \
             zip unzip \
             libssl-dev libffi-dev zlib1g-dev \
             git patch wget
@@ -38,10 +37,8 @@ jobs:
           with open('buildozer.spec', 'r') as f:
               content = f.read()
 
-          # Удаляем устаревший android.sdk
           content = re.sub(r'^android\.sdk\s*=.*\n?', '', content, flags=re.MULTILINE)
 
-          # Фиксируем версии Python
           def fix_requirements(m):
               items = [x.strip() for x in m.group(1).split(',')]
               items = [x for x in items if x not in ('python3', 'hostpython3') and not x.startswith('python3=') and not x.startswith('hostpython3=')]
@@ -69,26 +66,28 @@ jobs:
       - name: Build APK
         env:
           BUILDOZER_WARN_ON_ROOT: 0
+          JAVA_HOME: /usr/lib/jvm/temurin-17-jdk-amd64
           ANDROID_HOME: /usr/local/lib/android/sdk
           ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
         run: |
           set -o pipefail
+          java -version
           buildozer -v android debug 2>&1 | tee build.log
 
       - name: Find APK files
         if: always()
         run: |
-          echo "=== Ищем все APK в системе ==="
-          find / -name "*.apk" 2>/dev/null | head -20
+          echo "=== Ищем APK ==="
+          find /home/runner -name "*.apk" 2>/dev/null | head -20
           echo ""
-          echo "=== Содержимое папки bin ==="
+          echo "=== Папка bin ==="
           ls -la bin/ 2>/dev/null || echo "Папки bin нет"
           echo ""
-          echo "=== Последние 300 строк build.log ==="
-          tail -n 300 build.log || echo "build.log пустой"
+          echo "=== Последние 200 строк build.log ==="
+          tail -n 200 build.log 2>/dev/null || echo "build.log пустой"
           echo ""
-          echo "=== Поиск ошибок в логе ==="
-          grep -i "error\|failed\|exception" build.log | tail -n 50 || true
+          echo "=== Поиск ошибок ==="
+          grep -i "error\|failed\|exception" build.log 2>/dev/null | grep -v "SyntaxError" | tail -n 30 || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
