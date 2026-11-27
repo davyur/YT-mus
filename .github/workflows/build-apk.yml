@@ -48,21 +48,7 @@ jobs:
       - name: Clean Buildozer cache
         run: |
           rm -rf ~/.buildozer/android/platform/build-arm64-v8a
-          rm -rf ~/.buildozer/android/platform/build-arm64-v8a_armeabi-v7a
           echo "✅ Кэш очищен"
-
-      - name: Verify files
-        run: |
-          echo "=== Проверка файлов ==="
-          ls -la buildozer.spec
-          ls -la AndroidManifest.tmpl.xml
-          ls -la icon.png
-          echo ""
-          echo "=== Ключевые строки spec ==="
-          grep -E "(manifest|icon|requirements|title|package)" buildozer.spec
-          echo ""
-          echo "=== Проверка enableOnBackInvokedCallback ==="
-          grep -c "enableOnBackInvokedCallback" AndroidManifest.tmpl.xml || echo "❌ НЕ НАЙДЕНО!"
 
       - name: Build APK
         env:
@@ -75,24 +61,40 @@ jobs:
           java -version
           buildozer -v android debug 2>&1 | tee build.log
 
-      - name: Find APK files
+      - name: Find APK
         if: always()
         run: |
           echo "=== Ищем APK ==="
           find /home/runner -name "*.apk" 2>/dev/null | head -20
-          echo ""
-          echo "=== Папка bin ==="
           ls -la bin/ 2>/dev/null || echo "Папки bin нет"
-          echo ""
-          echo "=== Последние 200 строк build.log ==="
-          tail -n 200 build.log 2>/dev/null || echo "build.log пустой"
 
-      - name: Upload APK
+      - name: Upload to Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: musicapp-apk
           path: |
             bin/*.apk
             .buildozer/**/*.apk
-          if-no-files-found: error
-          retention-days: 30
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Create GitHub Release with APK
+        if: success()
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ github.run_number }}
+          name: "YTmus Build #${{ github.run_number }}"
+          body: |
+            Автоматическая сборка YTmus
+            - Версия: 1.1.0
+            - Архитектура: arm64-v8a
+            - Python: 3.11.9
+            - Сборка: #${{ github.run_number }}
+          files: |
+            bin/*.apk
+            .buildozer/**/*.apk
+          fail_on_unmatched_files: false
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
