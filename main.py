@@ -1,12 +1,6 @@
 """
 YTmus — Kivy/KivyMD APK (Android) + Desktop
-Улучшенная версия исходного прототипа:
-  - исправлены баги (MDList не импортировался, дублирование bind-кнопок,
-    утечки Sound, сканер не обновлял UI)
-  - поиск по библиотеке, избранное, плейлисты, история воспроизведения
-  - мини-плеер со слайдером перемотки, play/pause/stop, next/prev
-  - блокировка сна экрана во время воспроизведения (Window.softinput / prevent_screensaver)
-  - сборка APK через Buildozer (buildozer.spec в репозитории)
+Исправленная версия для стабильной работы на Android
 """
 
 import os
@@ -61,7 +55,8 @@ def get_music_directory():
     """Каталог с музыкой: Android storagepath -> ~/Music -> каталог приложения."""
     try:
         from plyer import storagepath
-        path = storagepath.get_external_storage_dir_music()
+        # ИСПРАВЛЕНО: правильный метод plyer
+        path = storagepath.get_music_dir()
         if path and os.path.exists(path):
             return path
     except Exception:
@@ -305,8 +300,6 @@ class TrackRowRV(MDBoxLayout):
         col.add_widget(self.sub_label)
         self.add_widget(col)
 
-        # Привязки один раз при создании, данные читаем из self.* в колбэках —
-        # так RecycleView-переиспользование виджетов не приводит к дублям bind.
         self.btn_fav = MDIconButton(icon="heart-outline")
         self.btn_fav.bind(on_release=self.on_fav)
         self.btn_more = MDIconButton(icon="dots-vertical")
@@ -325,7 +318,7 @@ class TrackRowRV(MDBoxLayout):
         super().refresh_view_attrs(rv, index, data)
         self.track_id = data['id']
         self.path = data['path']
-        if self.track_id is None:  # пустая строка-заглушка
+        if self.track_id is None:
             self.title_label.text = "Нет треков"
             self.sub_label.text = ""
             self.btn_fav.icon = "heart-outline"
@@ -379,7 +372,6 @@ class TrackRecycleView(RecycleView):
                 'pos': (0, y), 'size': (Window.width, dp(72)),
             })
             y -= dp(72)
-        # Пустая запись принудительно очищает старые view'ы RecycleView
         self.data = [{"id": None, "path": "", "title": "", "artist": "",
                       "album": "", "favorite": 0}] + data if not data else data
 
@@ -563,80 +555,9 @@ class PlayerState:
         self.current_track_id = None
         self.current_path = None
         self.current_duration = 0
-        self.queue = []          # список track_id текущего контекста
+        self.queue = []
         self.queue_index = -1
         self.paused = False
-
-
-class BackgroundServicePlayer:
-    """Обёртка над android.service (p4a) для фоновой службы `myservice`.
-
-    На Android музыка играет в отдельном процессе (service/main.py), поэтому
-    не останавливается при сворачивании приложения. На десктопе/при отсутствии
-    пакета `android` — no-op, и приложение использует обычный SoundLoader.
-    """
-
-    def __init__(self, app):
-        self.app = app
-        self.token = None
-        self.available = False
-        if platform == "android":
-            try:
-                from android import service as _svc
-                self._svc_module = _svc
-                self.available = True
-            except Exception as e:
-                print(f"[service] android.service недоступен: {e}")
-
-    def start(self):
-        if not self.available or self.token is not None:
-            return
-        try:
-            self.token = self._svc_module.AndroidService("myservice")
-            self.token.start(on_task_start=self._on_started)
-        except Exception as e:
-            print(f"[service] не удалось запустить службу: {e}")
-            self.token = None
-
-    def _on_started(self, token):
-        print("[service] служба готова")
-
-    def send(self, **message):
-        """Отправить команду службе; ответ приходит в on_result (см. _route)."""
-        if not self.available or self.token is None:
-            return False
-        try:
-            self.token.send(message,
-                            on_result=self._route,
-                            on_error=lambda e: print(f"[service] err: {e}"))
-            return True
-        except Exception as e:
-            print(f"[service] send error: {e}")
-            return False
-
-    def _route(self, token, result):
-        """Разносит ответы службы: статус 'ping' -> в UI-поток приложения."""
-        try:
-            if isinstance(result, dict) and "state" in result:
-                Clock.schedule_once(
-                    lambda dt: self.app.on_service_status(result), 0)
-        except Exception as e:
-            print(f"[service] route error: {e}")
-
-    def play(self, path, track_id):
-        return self.send(cmd="play", path=path, track_id=track_id)
-
-    def pause(self):
-        return self.send(cmd="pause")
-
-    def resume(self):
-        return self.send(cmd="resume")
-
-    def stop(self):
-        return self.send(cmd="stop")
-
-    def seek(self, pos):
-        return self.send(cmd="seek", pos=pos)
 
 
 class MusicApp(MDApp):
@@ -645,10 +566,6 @@ class MusicApp(MDApp):
         self.theme_cls.theme_style = "Dark"
         self.theme_cls.primary_palette = "BlueGray"
         self.state = PlayerState()
-        # Фоновая служба (Android). Если недоступна — плеер работает в UI-процессе.
-        self.bgs = BackgroundServicePlayer(self)
-        self.bgs_active = False   # True, если служба реально принимает команды
-        Clock.schedule_once(lambda dt: self.bgs.start(), 0.3)
 
         self.sm = ScreenManager()
         self.library = LibraryScreen(name="library")
@@ -673,7 +590,6 @@ class MusicApp(MDApp):
 
         return root
 
-    # ---------------- навигация ----------------
     def build_topbar(self):
         bar = MDBoxLayout(size_hint_y=None, height=dp(56), padding=dp(6), spacing=dp(6))
         for text, screen in (("Библиотека", "library"), ("Плейлисты", "playlists"),
@@ -687,7 +603,6 @@ class MusicApp(MDApp):
             self.history.refresh()
         self.sm.current = screen
 
-    # ---------------- мини-плеер ----------------
     def build_miniplayer(self):
         card = MDCard(size_hint_y=None, height=dp(130), padding=dp(8),
                       radius=[18, 18, 0, 0], elevation=6)
@@ -713,7 +628,6 @@ class MusicApp(MDApp):
         card.add_widget(box)
         return card
 
-    # ---------------- сканирование / обновление ----------------
     def start_scan(self):
         music_dir = get_music_directory()
         threading.Thread(target=scan_music_folder,
@@ -729,7 +643,6 @@ class MusicApp(MDApp):
         if self.playlist_view.playlist_id is not None:
             self.playlist_view.refresh()
 
-    # ---------------- воспроизведение ----------------
     def track_row(self, track_id):
         return load_all_tracks("id=?", (track_id,))
 
@@ -756,49 +669,21 @@ class MusicApp(MDApp):
             if track_id in self.state.queue:
                 self.state.queue_index = self.state.queue.index(track_id)
 
-        # Приоритет — фоновая служба (Android): звук не останавливается при
-        # сворачивании приложения. Если служба недоступна — fallback на
-        # SoundLoader в UI-процессе + prevent_screensaver (экран не гаснет).
-        if self.bgs.play(t[1], track_id):
-            self.bgs_active = True
-            self.now_label.text = f"{t[2]} — {t[3]}"
-            self.btn_toggle.icon = "pause"
-            log_play(track_id)
-            return
-
-        self.bgs_active = False
         if self.state.sound:
             self.state.sound.play()
             self.now_label.text = f"{t[2]} — {t[3]}"
             self.btn_toggle.icon = "pause"
-            Window.prevent_screensaver = True
             log_play(track_id)
         else:
             self.now_label.text = f"Не удалось открыть: {t[2]}"
 
     def play_current(self):
-        if self.bgs_active:
-            self.bgs.resume()
-            self.state.paused = False
-            self.btn_toggle.icon = "pause"
-            return
         if self.state.sound and self.state.sound.state != "play":
             self.state.sound.play()
             self.state.paused = False
             self.btn_toggle.icon = "pause"
-            Window.prevent_screensaver = True
 
     def toggle_play(self, *_):
-        if self.bgs_active:
-            if self.state.paused:
-                self.bgs.resume()
-                self.state.paused = False
-                self.btn_toggle.icon = "pause"
-            else:
-                self.bgs.pause()
-                self.state.paused = True
-                self.btn_toggle.icon = "play"
-            return
         if not self.state.sound:
             if self.state.queue:
                 self.play_track_by_id(self.state.queue[0], self.state.queue)
@@ -821,8 +706,6 @@ class MusicApp(MDApp):
                                   self.state.queue)
 
     def stop_track(self, *_):
-        if self.bgs_active:
-            self.bgs.stop()
         if self.state.sound:
             self.state.sound.stop()
             self.state.sound.unload()
@@ -831,7 +714,6 @@ class MusicApp(MDApp):
         self.now_label.text = "Не играет"
         self.btn_toggle.icon = "play"
         self.progress.value = 0
-        Window.prevent_screensaver = False
 
     def on_seek(self, instance, touch):
         if not self.state.current_duration or self.state.current_duration <= 0:
@@ -841,50 +723,26 @@ class MusicApp(MDApp):
                 frac = (touch.x - self.progress.x) / max(self.progress.width, 1)
                 frac = max(0.0, min(1.0, frac))
                 pos = frac * self.state.current_duration
-                if self.bgs_active:
-                    self.bgs.seek(pos)
-                elif self.state.sound:
+                if self.state.sound:
                     self.state.sound.seek(pos)
         except Exception:
             pass
 
     def update_progress(self, *_):
-        # Источник позиции: фоновая служба (Android) или SoundLoader в UI-процессе
-        pos = None
-        playing = False
-        if self.bgs_active and self.state.current_track_id is not None:
-            # ping не блокирует UI; статус обновится асинхронно через on_service_status
-            self.bgs.send(cmd="ping")
-            pos = getattr(self, "_svc_pos", None)
-            playing = getattr(self, "_svc_state", "") in ("play", "pause")
-            if pos is None:
-                return
-        elif self.state.sound and self.state.current_duration > 0 \
+        if self.state.sound and self.state.current_duration > 0 \
                 and self.state.sound.state == "play":
             try:
                 pos = self.state.sound.get_pos() or 0
-                playing = True
+                self.progress.max = self.state.current_duration
+                self.progress.value = min(pos, self.state.current_duration)
+                self.time_label.text = (f"{int(pos // 60)}:{int(pos % 60):02d} / "
+                                        f"{int(self.state.current_duration // 60)}:"
+                                        f"{int(self.state.current_duration % 60):02d}")
+                if pos >= self.state.current_duration - 0.5:
+                    self.next_track()
             except Exception:
-                pos = None
-        if pos is None or self.state.current_duration <= 0:
-            return
-        self.progress.max = self.state.current_duration
-        self.progress.value = min(pos, self.state.current_duration)
-        self.time_label.text = (f"{int(pos // 60)}:{int(pos % 60):02d} / "
-                                f"{int(self.state.current_duration // 60)}:"
-                                f"{int(self.state.current_duration % 60):02d}")
-        if playing and pos >= self.state.current_duration - 0.5:
-            self.next_track()
+                pass
 
-    def on_service_status(self, status):
-        """Колбэк ответа службы на 'ping' (зарегистрирован при старте)."""
-        try:
-            self._svc_state = status.get("state")
-            self._svc_pos = status.get("pos")
-        except Exception:
-            pass
-
-    # ---------------- меню трека (добавить в плейлист и т.д.) ----------------
     def open_track_menu(self, track_id, anchor):
         items = [("Играть", lambda: self.play_from_context(track_id)),
                  ("В избранное", lambda: self.fav_and_refresh(track_id))]
@@ -892,18 +750,19 @@ class MusicApp(MDApp):
             items.append((f"+ «{name}»",
                           lambda p=pid, t=track_id: (add_track_to_playlist(p, t),
                                                      self.playlists.refresh())))
+        
+        # ИСПРАВЛЕНО: простой MDDialog для KivyMD 1.2.0
         content = MDList()
         for text, cb in items:
             li = OneLineListItem(text=text)
             li.bind(on_release=lambda _, c=cb: (c(), self.close_menu()))
             content.add_widget(li)
-        self._menu_dialog = MDDialog(title="Трек", content_radius_vertical=10,
-                                     items=[], text_button_right="Закрыть",
-                                     on_press_dismiss=True)
-        # Простой вариант: MDDialog со списком элементов
-        self._menu_dialog = MDDialog(title="Трек", type="simple", items=[
-            OneLineListItem(text=text, on_release=lambda _, c=cb: (c(), self.close_menu()))
-            for text, cb in items])
+        
+        self._menu_dialog = MDDialog(
+            title="Трек",
+            content=content,
+            buttons=[MDFlatButton(text="Закрыть", on_release=lambda _: self.close_menu())]
+        )
         self._menu_dialog.open()
 
     def close_menu(self):
@@ -918,7 +777,6 @@ class MusicApp(MDApp):
         ids = [d['id'] for d in self.library.rv.data] or [track_id]
         self.play_track_by_id(track_id, ids)
 
-    # ---------------- удаление плейлиста ----------------
     def confirm_delete_playlist(self):
         pid = self.playlist_view.playlist_id
         if pid is None:
@@ -937,25 +795,13 @@ class MusicApp(MDApp):
         self._del_dialog.open()
 
     def on_pause(self):
-        """Android: сворачивание в фон.
-
-        Если активна фоновая служба (myservice) — НЕ останавливаем звук:
-        он продолжает играть в отдельном процессе. Иначе (fallback-режим
-        SoundLoader в UI-процессе) пауза обязательна, т.к. SDL-звук в фоне
-        всё равно был бы убит ОС.
-        Возврат True оставляет приложение живым в фоне.
-        """
         return True
 
     def on_resume(self):
-        # При возврате из фона синхронизируем UI со службой
-        if self.bgs_active and self.state.current_track_id is not None:
-            self.bgs.send(cmd="ping")
+        pass
 
     def on_stop(self):
-        # Полное закрытие приложения (свайп из недавних) — останавливаем воспроизведение
-        if not self.bgs_active:
-            self.stop_track()
+        self.stop_track()
 
 
 if __name__ == "__main__":
