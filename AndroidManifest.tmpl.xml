@@ -1,98 +1,46 @@
-name: Build APK
+<?xml version="1.0" encoding="utf-8"?>
+<manifest
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    package="{{ args.package }}"
+    android:versionCode="{{ args.numeric_version }}"
+    android:versionName="{{ args.version }}"
+    android:installLocation="{{ args.install_location }}"
+    android:enableOnBackInvokedCallback="true">
 
-on:
-  workflow_dispatch:
+    <uses-sdk android:minSdkVersion="{{ args.min_sdk_version }}"
+              android:targetSdkVersion="{{ args.api }}" />
 
-jobs:
-  build:
-    runs-on: ubuntu-22.04
-    timeout-minutes: 90
-    steps:
-      - uses: actions/checkout@v4
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
 
-      - name: Set up Python 3.11
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
+    <uses-feature android:glEsVersion="0x00020000" android:required="true" />
 
-      - name: Install system dependencies
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y \
-            autoconf automake libtool libtool-bin pkg-config \
-            cmake ninja-build build-essential \
-            zip unzip \
-            libssl-dev libffi-dev zlib1g-dev \
-            git patch wget
+    <application
+        android:label="{{ args.name }}"
+        android:icon="@mipmap/icon"
+        android:enableOnBackInvokedCallback="true"
+        android:allowBackup="false"
+        android:hasCode="true">
 
-      - name: Install Python build tools
-        run: |
-          python -m pip install --upgrade pip
-          pip install buildozer "cython==0.29.33"
-
-      - name: Prepare Buildozer Android SDK
-        run: |
-          BUILDOZER_SDK="$HOME/.buildozer/android/platform/android-sdk"
-          SYS_SDK="/usr/local/lib/android/sdk"
-          mkdir -p "$BUILDOZER_SDK"
-          ln -sfn "$SYS_SDK/cmdline-tools/latest" "$BUILDOZER_SDK/tools"
-          ln -sfn "$SYS_SDK/build-tools" "$BUILDOZER_SDK/build-tools"
-          ln -sfn "$SYS_SDK/platforms" "$BUILDOZER_SDK/platforms"
-          mkdir -p "$BUILDOZER_SDK/licenses"
-          echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$BUILDOZER_SDK/licenses/android-sdk-license"
-          echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > "$BUILDOZER_SDK/licenses/android-sdk-preview-license"
-          yes | "$BUILDOZER_SDK/tools/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
-          "$BUILDOZER_SDK/tools/bin/sdkmanager" "build-tools;33.0.2" "build-tools;37.0.0" "platforms;android-33" "platforms;android-34"
-          echo "✅ Buildozer SDK готов"
-
-      - name: Clean Buildozer cache
-        run: |
-          rm -rf ~/.buildozer/android/platform/build-arm64-v8a
-          rm -rf ~/.buildozer/android/platform/build-arm64-v8a_armeabi-v7a
-          echo "✅ Кэш очищен"
-
-      - name: Verify files
-        run: |
-          echo "=== Проверка файлов ==="
-          ls -la buildozer.spec
-          ls -la AndroidManifest.tmpl.xml
-          ls -la icon.png
-          echo ""
-          echo "=== Ключевые строки spec ==="
-          grep -E "(manifest|icon|requirements|title|package)" buildozer.spec
-          echo ""
-          echo "=== Проверка enableOnBackInvokedCallback ==="
-          grep -c "enableOnBackInvokedCallback" AndroidManifest.tmpl.xml || echo "❌ НЕ НАЙДЕНО!"
-
-      - name: Build APK
-        env:
-          BUILDOZER_WARN_ON_ROOT: 0
-          JAVA_HOME: /usr/lib/jvm/temurin-17-jdk-amd64
-          ANDROID_HOME: /usr/local/lib/android/sdk
-          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-        run: |
-          set -o pipefail
-          java -version
-          buildozer -v android debug 2>&1 | tee build.log
-
-      - name: Find APK files
-        if: always()
-        run: |
-          echo "=== Ищем APK ==="
-          find /home/runner -name "*.apk" 2>/dev/null | head -20
-          echo ""
-          echo "=== Папка bin ==="
-          ls -la bin/ 2>/dev/null || echo "Папки bin нет"
-          echo ""
-          echo "=== Последние 200 строк build.log ==="
-          tail -n 200 build.log 2>/dev/null || echo "build.log пустой"
-
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: musicapp-apk
-          path: |
-            bin/*.apk
-            .buildozer/**/*.apk
-          if-no-files-found: error
-          retention-days: 30
+        <activity
+            android:name="org.kivy.android.PythonActivity"
+            android:label="{{ args.name }}"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|locale|uiMode"
+            android:launchMode="singleTop"
+            android:theme="@android:style/Theme.NoTitleBar"
+            android:exported="true"
+            android:enableOnBackInvokedCallback="true">
+            
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
