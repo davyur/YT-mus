@@ -30,74 +30,39 @@ jobs:
           python -m pip install --upgrade pip
           pip install buildozer "cython==0.29.33"
 
-      - name: Prepare Buildozer Android SDK (КРИТИЧНО!)
+      - name: Prepare Buildozer Android SDK
         run: |
           BUILDOZER_SDK="$HOME/.buildozer/android/platform/android-sdk"
           SYS_SDK="/usr/local/lib/android/sdk"
           mkdir -p "$BUILDOZER_SDK"
-
-          # 1. Симлинк tools -> cmdline-tools/latest (чтобы buildozer нашёл tools/bin/sdkmanager)
           ln -sfn "$SYS_SDK/cmdline-tools/latest" "$BUILDOZER_SDK/tools"
-
-          # 2. Симлинки build-tools и platforms
           ln -sfn "$SYS_SDK/build-tools" "$BUILDOZER_SDK/build-tools"
           ln -sfn "$SYS_SDK/platforms" "$BUILDOZER_SDK/platforms"
-
-          # 3. Лицензии в папку buildozer SDK
           mkdir -p "$BUILDOZER_SDK/licenses"
           echo -e "\n24333f8a63b6825ea9c5514f83c2829b004d1fee" > "$BUILDOZER_SDK/licenses/android-sdk-license"
           echo -e "\n84831b9409646a918e30573bab4c9c91346d8abd" > "$BUILDOZER_SDK/licenses/android-sdk-preview-license"
-          echo -e "\nd56f5187479451eabf01fb78af6dfcb131a6481e" >> "$BUILDOZER_SDK/licenses/android-sdk-license"
-          echo -e "\n8933bad161af4178b1185d1a37fbf41ea5269c55" >> "$BUILDOZER_SDK/licenses/android-sdk-license"
-          echo -e "\nf24b57655a11ec27974fff03e86249a5972f6219" >> "$BUILDOZER_SDK/licenses/android-sdk-license"
-          echo -e "\n05c211ca760038ce0040502140a00f49e6c28780" >> "$BUILDOZER_SDK/licenses/android-sdk-license"
-
-          # 4. Проверка, что sdkmanager теперь существует
-          echo "=== Проверка sdkmanager ==="
-          ls -la "$BUILDOZER_SDK/tools/bin/sdkmanager"
-          "$BUILDOZER_SDK/tools/bin/sdkmanager" --version
-
-          # 5. Установка build-tools и platforms через sdkmanager
-          echo "=== Установка build-tools ==="
           yes | "$BUILDOZER_SDK/tools/bin/sdkmanager" --licenses > /dev/null 2>&1 || true
           "$BUILDOZER_SDK/tools/bin/sdkmanager" "build-tools;33.0.2" "build-tools;37.0.0" "platforms;android-33" "platforms;android-34"
-          echo "=== Проверка aidl ==="
-          ls -la "$BUILDOZER_SDK/build-tools/33.0.2/aidl" || ls -la "$BUILDOZER_SDK/build-tools/37.0.0/aidl"
           echo "✅ Buildozer SDK готов"
 
-      - name: Fix buildozer.spec
+      - name: Clean Buildozer cache
         run: |
-          python3 << 'PYEOF'
-          import re
-          with open('buildozer.spec', 'r') as f:
-              content = f.read()
+          rm -rf ~/.buildozer/android/platform/build-arm64-v8a
+          rm -rf ~/.buildozer/android/platform/build-arm64-v8a_armeabi-v7a
+          echo "✅ Кэш очищен"
 
-          # Убираем deprecated android.sdk
-          content = re.sub(r'^android\.sdk\s*=.*\n?', '', content, flags=re.MULTILINE)
-
-          def fix_requirements(m):
-              items = [x.strip() for x in m.group(1).split(',')]
-              items = [x for x in items if x not in ('python3', 'hostpython3') and not x.startswith('python3=') and not x.startswith('hostpython3=')]
-              remove = {'sdl2', 'sdl2_ttf', 'sdl2_image', 'sdl2_mixer', 'sqlite3', 'android'}
-              items = [x for x in items if x not in remove and x]
-              items = ['hostpython3==3.11.9', 'python3==3.11.9'] + items
-              return 'requirements = ' + ','.join(items)
-
-          content = re.sub(r'^requirements\s*=\s*(.+)$', fix_requirements, content, flags=re.MULTILINE)
-          content = re.sub(r'^android\.arch\s*=.*', 'android.archs = arm64-v8a', content, flags=re.MULTILINE)
-          if 'android.archs' not in content:
-              content = content.replace('[app]', '[app]\nandroid.archs = arm64-v8a', 1)
-          if 'android.sdk_build_tools' not in content:
-              content = content.replace('android.ndk = 25b', 'android.ndk = 25b\nandroid.sdk_build_tools = 33.0.2')
-          content = content.replace('warn_on_root = 1', 'warn_on_root = 0')
-
-          with open('buildozer.spec', 'w') as f:
-              f.write(content)
-          print("✅ spec обновлён")
-          for line in content.splitlines():
-              if line.startswith('requirements') or line.startswith('android.'):
-                  print(line)
-          PYEOF
+      - name: Verify files
+        run: |
+          echo "=== Проверка файлов ==="
+          ls -la buildozer.spec
+          ls -la AndroidManifest.tmpl.xml
+          ls -la icon.png
+          echo ""
+          echo "=== Ключевые строки spec ==="
+          grep -E "(manifest|icon|requirements|title|package)" buildozer.spec
+          echo ""
+          echo "=== Проверка enableOnBackInvokedCallback ==="
+          grep -c "enableOnBackInvokedCallback" AndroidManifest.tmpl.xml || echo "❌ НЕ НАЙДЕНО!"
 
       - name: Build APK
         env:
@@ -121,9 +86,6 @@ jobs:
           echo ""
           echo "=== Последние 200 строк build.log ==="
           tail -n 200 build.log 2>/dev/null || echo "build.log пустой"
-          echo ""
-          echo "=== Поиск ошибок ==="
-          grep -i "error\|failed\|exception" build.log 2>/dev/null | grep -v "SyntaxError" | tail -n 30 || true
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
