@@ -3,6 +3,9 @@ name: Build APK
 on:
   workflow_dispatch:
 
+permissions:
+  contents: write  ← ЭТО КЛЮЧЕВОЕ!
+
 jobs:
   build:
     runs-on: ubuntu-22.04
@@ -89,7 +92,6 @@ jobs:
             - Версия: 1.1.0
             - Архитектура: arm64-v8a
             - Python: 3.11.9
-            - Сборка: #${{ github.run_number }}
           files: |
             bin/*.apk
             .buildozer/**/*.apk
