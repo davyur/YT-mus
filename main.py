@@ -6,16 +6,15 @@ import shutil
 import hashlib
 import threading
 from kivy.clock import Clock
+from kivy.utils import platform
 
 # ---------------------------------------------------------------------------
 # Пути
 # ---------------------------------------------------------------------------
 DB_PATH = "/data/data/org.davyur.ytmus/files/ytmus.db"
-MUSIC_SRC = "/storage/emulated/0/Music"
 MUSIC_DST = "/storage/emulated/0/YTmus"
 MUSIC_DST_FALLBACK = "/storage/emulated/0/Android/data/org.davyur.ytmus/files/YTmus"
 
-# Поддерживаемые форматы (все в нижнем регистре)
 SUPPORTED_EXTENSIONS = {".mp3", ".m4a", ".flac", ".wav", ".ogg", ".aac", ".wma"}
 
 
@@ -64,7 +63,6 @@ def init_db():
 
 
 def safe_target(dst_dir, name):
-    """Возвращает путь с суффиксом (1), (2)... если имя занято."""
     base, ext = os.path.splitext(name)
     candidate = os.path.join(dst_dir, name)
     i = 1
@@ -74,23 +72,56 @@ def safe_target(dst_dir, name):
     return candidate
 
 
+def scan_via_mediastore():
+    """Сканирует все аудиофайлы через MediaStore (работает на Android 11+)."""
+    if platform != "android":
+        return []
+    
+    try:
+        from jnius import autoclass
+        
+        MediaStore = autoclass("android.provider.MediaStore")
+        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+        activity = PythonActivity.mActivity
+        
+        cursor = activity.getContentResolver().query(
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+            None, None, None, None
+        )
+        
+        files = []
+        if cursor:
+            while cursor.moveToNext():
+                path_idx = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
+                title_idx = cursor.getColumnIndex(MediaStore.Audio.Media.DISPLAY_NAME)
+                size_idx = cursor.getColumnIndex(MediaStore.Audio.Media.SIZE)
+                
+                path = cursor.getString(path_idx)
+                title = cursor.getString(title_idx)
+                size = cursor.getLong(size_idx)
+                
+                if path and title:
+                    ext = os.path.splitext(path)[1].lower()
+                    if ext in SUPPORTED_EXTENSIONS:
+                        files.append((path, title, size, ext))
+            
+            cursor.close()
+        
+        return files
+    except Exception as e:
+        print(f"MediaStore error: {e}")
+        return []
+
+
 def scan_and_collect(dst_dir, progress_cb):
     init_db()
 
-    # 1. Собираем все аудиофайлы рекурсивно
-    all_files = []
-    for root, dirs, files in os.walk(MUSIC_SRC):
-        for f in files:
-            ext = os.path.splitext(f)[1].lower()
-            if ext in SUPPORTED_EXTENSIONS:
-                full = os.path.join(root, f)
-                try:
-                    size = os.path.getsize(full)
-                except Exception:
-                    continue
-                all_files.append((full, f, size, ext))
-
+    # 1. Сканируем через MediaStore
+    all_files = scan_via_mediastore()
     progress_cb(("scanned", len(all_files)))
+
+    if not all_files:
+        return {"copied": 0, "dupes": 0, "errors": 0}
 
     # 2. Группируем по размеру
     by_size = {}
@@ -216,7 +247,7 @@ class MusicApp(MDApp):
             self.root.ids.status_label.text = "НЕТ ПРАВ на создание папки!"
             return
         self.root.ids.dst_label.text = f"Папка: {dst}"
-        self.root.ids.status_label.text = "Сканирование..."
+        self.root.ids.status_label.text = "Сканирование через MediaStore..."
         self.root.ids.found_label.text = "Найдено файлов: ..."
         self.root.ids.copied_label.text = "Скопировано: ..."
 
@@ -253,7 +284,7 @@ class MusicApp(MDApp):
         rows = c.fetchall()
         conn.close()
         items = [f"{r[0]}{r[1]}" for r in rows]
-        self.root.ids.status_label.text = "Треки: " + ", ".join(items)
+        self.root.ids.status_label.text = "Треки: " + ", ".join(items) if items else "База пуста"
 
 
 if __name__ == "__main__":
