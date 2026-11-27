@@ -798,4 +798,4 @@ class MusicApp(MDApp):
 
 
 if __name__ == "__main__":
-    MusicApp().run(
+    MusicApp().run()
