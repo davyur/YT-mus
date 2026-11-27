@@ -14,47 +14,62 @@ from kivymd.uix.label import MDLabel
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.toolbar import MDTopAppBar
 
-# === АВТОМАТИЧЕСКОЕ ЛОГИРОВАНИЕ ОШИБОК ===
+# === ЛОГИРОВАНИЕ ОШИБОК (исправлено для Android) ===
 import sys
 import traceback
 
-LOG_DIR = Path.home() / ".music_app"
-LOG_DIR.mkdir(parents=True, exist_ok=True)
-LOG_FILE = str(LOG_DIR / "crash.log")
+def get_app_dir():
+    """Получить директорию приложения, работающую на всех платформах."""
+    if platform == "android":
+        try:
+            from jnius import autoclass
+            Environment = autoclass("android.os.Environment")
+            base = Path(Environment.getExternalStorageDirectory().getAbsolutePath())
+        except Exception:
+            base = Path("/data/data/org.davyur.ytmus/files")
+    else:
+        base = Path.home()
+    
+    app_dir = base / ".music_app"
+    app_dir.mkdir(parents=True, exist_ok=True)
+    return app_dir
+
+APP_DIR = get_app_dir()
+LOG_FILE = str(APP_DIR / "crash.log")
 
 def log_exception(exc_type, exc_value, exc_traceback):
-    with open(LOG_FILE, "w", encoding="utf-8") as f:
-        f.write("=== CRASH LOG ===\n")
-        traceback.print_exception(exc_type, exc_value, exc_traceback, file=f)
+    try:
+        with open(LOG_FILE, "w", encoding="utf-8") as f:
+            f.write("=== CRASH LOG ===\n")
+            traceback.print_exception(exc_type, exc_value, exc_traceback, file=f)
+    except Exception:
+        pass
     sys.__excepthook__(exc_type, exc_value, exc_traceback)
 
 sys.excepthook = log_exception
 # ==========================================
 
 # ---------------------------------------------------------------------------
-# Конфигурация / хранилище
+# База данных
 # ---------------------------------------------------------------------------
-
-APP_DIR = Path.home() / ".music_app"
-if platform == "android":
-    try:
-        from jnius import autoclass
-        Environment = autoclass("android.os.Environment")
-        APP_DIR = Path(Environment.getExternalStorageDirectory().getAbsolutePath()) / "MusicApp"
-    except Exception:
-        pass
-APP_DIR.mkdir(parents=True, exist_ok=True)
 
 DB_FILE = str(APP_DIR / "music_app.db")
 
 
 def get_music_directory():
     """Каталог с музыкой."""
-    # Для теста используем ~/Music или текущую директорию
+    if platform == "android":
+        try:
+            from plyer import storagepath
+            path = storagepath.get_music_dir()
+            if path and os.path.exists(path):
+                return path
+        except Exception:
+            pass
     fallback = Path.home() / "Music"
     if fallback.exists():
         return str(fallback)
-    return str(Path.cwd())
+    return "/storage/emulated/0/Music" if platform == "android" else str(Path.cwd())
 
 
 def db():
