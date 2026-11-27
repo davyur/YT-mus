@@ -1,6 +1,6 @@
 """
 YTmus — Kivy/KivyMD APK (Android) + Desktop
-Исправленная версия для стабильной работы на Android
+Исправленная версия для стабильной работы
 """
 
 import os
@@ -52,7 +52,7 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 
 def get_music_directory():
-    """Каталог с музыкой: Android storagepath -> ~/Music -> каталог приложения."""
+    """Каталог с музыкой."""
     try:
         from plyer import storagepath
         # ИСПРАВЛЕНО: правильный метод plyer
@@ -127,7 +127,6 @@ def parse_mp3(file_path):
 
 
 def scan_music_folder(root_dir, on_done=None):
-    """Потоковое bulk-сканирование. on_done вызывается по завершении."""
     count = 0
     if os.path.exists(root_dir):
         con = db()
@@ -235,15 +234,6 @@ def load_playlist_tracks(playlist_id):
     rows = cur.fetchall()
     con.close()
     return rows
-
-
-def update_track_meta(track_id, title, artist, album, genre):
-    con = db()
-    cur = con.cursor()
-    cur.execute("UPDATE tracks SET title=?, artist=?, album=?, genre=? WHERE id=?",
-                (title, artist, album, genre, track_id))
-    con.commit()
-    con.close()
 
 
 def toggle_favorite(track_id):
@@ -750,14 +740,13 @@ class MusicApp(MDApp):
             items.append((f"+ «{name}»",
                           lambda p=pid, t=track_id: (add_track_to_playlist(p, t),
                                                      self.playlists.refresh())))
-        
-        # ИСПРАВЛЕНО: простой MDDialog для KivyMD 1.2.0
+
         content = MDList()
         for text, cb in items:
             li = OneLineListItem(text=text)
             li.bind(on_release=lambda _, c=cb: (c(), self.close_menu()))
             content.add_widget(li)
-        
+
         self._menu_dialog = MDDialog(
             title="Трек",
             content=content,
@@ -794,6 +783,10 @@ class MusicApp(MDApp):
                      MDRaisedButton(text="Удалить", on_release=do_delete)])
         self._del_dialog.open()
 
+    def open_playlist_view(self, playlist_id, title):
+        self.playlist_view.load(playlist_id, title)
+        self.sm.current = "playlist_view"
+
     def on_pause(self):
         return True
 
@@ -805,4 +798,4 @@ class MusicApp(MDApp):
 
 
 if __name__ == "__main__":
-    MusicApp().run()
+    MusicApp().run(
