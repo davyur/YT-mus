@@ -3,18 +3,14 @@ import sqlite3
 import threading
 from pathlib import Path
 
+from kivy.app import App
 from kivy.clock import Clock
 from kivy.metrics import dp
+from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
 from kivy.utils import platform
 
-from kivymd.app import MDApp
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.label import MDLabel
-from kivymd.uix.screen import MDScreen
-from kivymd.uix.toolbar import MDToolbar
-
-# === ЛОГИРОВАНИЕ ОШИБОК ===
+# === ЛОГИРОВАНИЕ ===
 import sys
 import traceback
 
@@ -46,7 +42,11 @@ def log_exception(exc_type, exc_value, exc_traceback):
     sys.__excepthook__(exc_type, exc_value, exc_traceback)
 
 sys.excepthook = log_exception
-# ==========================================
+# =================
+
+print("=== YTmus START ===")
+print(f"Platform: {platform}")
+print(f"APP_DIR: {APP_DIR}")
 
 DB_FILE = str(APP_DIR / "music_app.db")
 
@@ -57,9 +57,10 @@ def get_music_directory():
             from plyer import storagepath
             path = storagepath.get_music_dir()
             if path and os.path.exists(path):
+                print(f"Music dir (plyer): {path}")
                 return path
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"plyer error: {e}")
         return "/storage/emulated/0/Music"
     fallback = Path.home() / "Music"
     if fallback.exists():
@@ -74,6 +75,7 @@ def db():
 
 
 def init_db():
+    print("init_db called")
     con = db()
     cur = con.cursor()
     cur.execute("""CREATE TABLE IF NOT EXISTS tracks (
@@ -82,9 +84,11 @@ def init_db():
         favorite INTEGER DEFAULT 0)""")
     con.commit()
     con.close()
+    print("init_db done")
 
 
 def scan_music_folder(root_dir):
+    print(f"Scanning: {root_dir}")
     count = 0
     if os.path.exists(root_dir):
         con = db()
@@ -101,46 +105,43 @@ def scan_music_folder(root_dir):
                         )
                         count += 1
                     except Exception as e:
-                        print(f"Error adding {path}: {e}")
+                        print(f"Error: {e}")
         con.commit()
         con.close()
+    print(f"Scan done: {count} tracks")
     return count
 
 
-class MusicApp(MDApp):
+class MusicApp(App):
     def build(self):
-        self.theme_cls.theme_style = "Dark"
-        self.theme_cls.primary_palette = "BlueGray"
+        print("build() called")
+        self.title = "YTmus"
         
         init_db()
         
-        screen = MDScreen()
-        layout = MDBoxLayout(orientation="vertical")
+        layout = BoxLayout(orientation="vertical", padding=20, spacing=20)
         
-        # ИСПРАВЛЕНО: MDToolbar вместо MDTopAppBar
-        layout.add_widget(MDToolbar(title="YTmus - Тест БД"))
-        
-        self.status_label = MDLabel(
-            text="Инициализация...",
-            halign="center",
-            text_color=(1, 1, 1, 1)
+        self.status_label = Label(
+            text="YTmus - Тест БД",
+            font_size="24sp",
+            color=(1, 1, 1, 1)
         )
         layout.add_widget(self.status_label)
         
-        self.count_label = MDLabel(
-            text="Треков найдено: 0",
-            halign="center",
-            text_color=(0.7, 0.7, 0.7, 1)
+        self.count_label = Label(
+            text="Загрузка...",
+            font_size="18sp",
+            color=(0.7, 0.7, 0.7, 1)
         )
         layout.add_widget(self.count_label)
         
-        screen.add_widget(layout)
-        
+        print("build() done, scheduling scan")
         Clock.schedule_once(lambda dt: self.start_scan(), 1.0)
         
-        return screen
+        return layout
     
     def start_scan(self):
+        print("start_scan called")
         music_dir = get_music_directory()
         self.status_label.text = f"Сканирование: {music_dir}"
         threading.Thread(target=self._scan_thread, args=(music_dir,), daemon=True).start()
@@ -150,9 +151,11 @@ class MusicApp(MDApp):
         Clock.schedule_once(lambda dt: self._update_ui(count), 0)
     
     def _update_ui(self, count):
-        self.status_label.text = "Сканирование завершено!"
+        print(f"_update_ui: {count}")
+        self.status_label.text = "Готово!"
         self.count_label.text = f"Треков найдено: {count}"
 
 
 if __name__ == "__main__":
+    print("Starting MusicApp...")
     MusicApp().run()
