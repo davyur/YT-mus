@@ -12,14 +12,13 @@ from kivymd.app import MDApp
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.label import MDLabel
 from kivymd.uix.screen import MDScreen
-from kivymd.uix.toolbar import MDTopAppBar
+from kivymd.uix.toolbar import MDToolbar
 
-# === ЛОГИРОВАНИЕ ОШИБОК (исправлено для Android) ===
+# === ЛОГИРОВАНИЕ ОШИБОК ===
 import sys
 import traceback
 
 def get_app_dir():
-    """Получить директорию приложения, работающую на всех платформах."""
     if platform == "android":
         try:
             from jnius import autoclass
@@ -49,15 +48,10 @@ def log_exception(exc_type, exc_value, exc_traceback):
 sys.excepthook = log_exception
 # ==========================================
 
-# ---------------------------------------------------------------------------
-# База данных
-# ---------------------------------------------------------------------------
-
 DB_FILE = str(APP_DIR / "music_app.db")
 
 
 def get_music_directory():
-    """Каталог с музыкой."""
     if platform == "android":
         try:
             from plyer import storagepath
@@ -66,10 +60,11 @@ def get_music_directory():
                 return path
         except Exception:
             pass
+        return "/storage/emulated/0/Music"
     fallback = Path.home() / "Music"
     if fallback.exists():
         return str(fallback)
-    return "/storage/emulated/0/Music" if platform == "android" else str(Path.cwd())
+    return str(Path.cwd())
 
 
 def db():
@@ -90,7 +85,6 @@ def init_db():
 
 
 def scan_music_folder(root_dir):
-    """Сканирование папки с музыкой."""
     count = 0
     if os.path.exists(root_dir):
         con = db()
@@ -113,41 +107,35 @@ def scan_music_folder(root_dir):
     return count
 
 
-# ---------------------------------------------------------------------------
-# Приложение
-# ---------------------------------------------------------------------------
-
 class MusicApp(MDApp):
     def build(self):
         self.theme_cls.theme_style = "Dark"
         self.theme_cls.primary_palette = "BlueGray"
         
-        # Инициализация БД
         init_db()
         
-        # UI
         screen = MDScreen()
         layout = MDBoxLayout(orientation="vertical")
         
-        layout.add_widget(MDTopAppBar(title="YTmus - Тест БД"))
+        # ИСПРАВЛЕНО: MDToolbar вместо MDTopAppBar
+        layout.add_widget(MDToolbar(title="YTmus - Тест БД"))
         
         self.status_label = MDLabel(
             text="Инициализация...",
             halign="center",
-            theme_text_color="Primary"
+            text_color=(1, 1, 1, 1)
         )
         layout.add_widget(self.status_label)
         
         self.count_label = MDLabel(
             text="Треков найдено: 0",
             halign="center",
-            theme_text_color="Secondary"
+            text_color=(0.7, 0.7, 0.7, 1)
         )
         layout.add_widget(self.count_label)
         
         screen.add_widget(layout)
         
-        # Запуск сканирования через 1 секунду
         Clock.schedule_once(lambda dt: self.start_scan(), 1.0)
         
         return screen
@@ -155,13 +143,10 @@ class MusicApp(MDApp):
     def start_scan(self):
         music_dir = get_music_directory()
         self.status_label.text = f"Сканирование: {music_dir}"
-        
-        # Сканирование в отдельном потоке
         threading.Thread(target=self._scan_thread, args=(music_dir,), daemon=True).start()
     
     def _scan_thread(self, music_dir):
         count = scan_music_folder(music_dir)
-        # Обновление UI в главном потоке
         Clock.schedule_once(lambda dt: self._update_ui(count), 0)
     
     def _update_ui(self, count):
