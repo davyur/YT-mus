@@ -1,5 +1,5 @@
 """
-Music Player — Kivy/KivyMD APK (Android) + Desktop
+YTmus — Kivy/KivyMD APK (Android) + Desktop
 Улучшенная версия исходного прототипа:
   - исправлены баги (MDList не импортировался, дублирование bind-кнопок,
     утечки Sound, сканер не обновлял UI)
