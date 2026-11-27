@@ -14,164 +14,47 @@ from kivy.utils import platform
 # Пути
 # ---------------------------------------------------------------------------
 DB_PATH = "/data/data/org.davyur.ytmus/files/ytmus.db"
-RELATIVE_MUSIC_PATH = "Music/YTmus"  # куда пишет MediaStore
+# App-specific папка — НЕ требует разрешений на запись!
+APP_SPECIFIC_DIR = "/storage/emulated/0/Android/data/org.davyur.ytmus/files/YTmus"
 SUPPORTED_EXTENSIONS = {".mp3", ".m4a", ".flac", ".wav", ".ogg", ".aac", ".wma"}
 
-MIME_MAP = {
-    ".mp3": "audio/mpeg",
-    ".m4a": "audio/mp4",
-    ".flac": "audio/flac",
-    ".wav": "audio/x-wav",
-    ".ogg": "audio/ogg",
-    ".aac": "audio/aac",
-    ".wma": "audio/x-ms-wma",
-}
-
 
 # ---------------------------------------------------------------------------
-# Разрешения (runtime)
+# Разрешения (правильный способ через android.permissions)
 # ---------------------------------------------------------------------------
-def request_runtime_permissions():
-    """Запрашивает READ_MEDIA_AUDIO + POST_NOTIFICATIONS на Android 13+."""
+def request_perms():
+    """Запрашивает разрешения через python-for-android API."""
     if platform != "android":
         return
     try:
-        from jnius import autoclass
-        PythonActivity = autoclass("org.kivy.android.PythonActivity")
-        activity = PythonActivity.mActivity
-        Build = autoclass("android.os.Build")
-        PackageManager = autoclass("android.content.pm.PackageManager")
-
-        if Build.VERSION.SDK_INT >= 33:
-            perms = [
-                "android.permission.READ_MEDIA_AUDIO",
-                "android.permission.POST_NOTIFICATIONS",
-            ]
-        else:
-            perms = [
-                "android.permission.READ_EXTERNAL_STORAGE",
-                "android.permission.WRITE_EXTERNAL_STORAGE",
-            ]
-
-        to_request = []
-        for p in perms:
-            if activity.checkSelfPermission(p) != PackageManager.PERMISSION_GRANTED:
-                to_request.append(p)
-
-        if to_request:
-            activity.requestPermissions(to_request, 1)
-            print(f"Запрошены разрешения: {to_request}")
+        from android.permissions import request_permissions, Permission, check_permission
+        perms = []
+        if not check_permission(Permission.READ_MEDIA_AUDIO):
+            perms.append(Permission.READ_MEDIA_AUDIO)
+        if not check_permission(Permission.POST_NOTIFICATIONS):
+            perms.append(Permission.POST_NOTIFICATIONS)
+        if perms:
+            print(f"Запрашиваем разрешения: {perms}")
+            request_permissions(perms)
+    except ImportError:
+        print("android.permissions не доступен")
     except Exception as e:
-        print(f"request_permissions error: {e}")
+        print(f"request_perms error: {e}")
 
 
-def check_all_files_access():
-    """Проверяет MANAGE_EXTERNAL_STORAGE (для fallback-копирования)."""
+def check_perms_status():
+    """Проверяет статус разрешений."""
     if platform != "android":
-        return True
+        return {"audio": True, "notif": True}
     try:
-        from jnius import autoclass
-        Environment = autoclass("android.os.Environment")
-        return Environment.isExternalStorageManager()
-    except Exception:
-        return False
-
-
-def open_all_files_settings():
-    """Открывает системные настройки 'Управление всем хранилищем'."""
-    if platform != "android":
-        return
-    try:
-        from jnius import autoclass
-        Intent = autoclass("android.content.Intent")
-        Settings = autoclass("android.provider.Settings")
-        Uri = autoclass("android.net.Uri")
-        PythonActivity = autoclass("org.kivy.android.PythonActivity")
-        activity = PythonActivity.mActivity
-
-        intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION)
-        intent.setData(Uri.parse("package:org.davyur.ytmus"))
-        activity.startActivity(intent)
+        from android.permissions import check_permission, Permission
+        return {
+            "audio": check_permission(Permission.READ_MEDIA_AUDIO),
+            "notif": check_permission(Permission.POST_NOTIFICATIONS),
+        }
     except Exception as e:
-        print(f"open_settings error: {e}")
-
-
-# ---------------------------------------------------------------------------
-# MediaStore: копирование файлов
-# ---------------------------------------------------------------------------
-def copy_via_mediastore(src_path, dst_name):
-    """
-    Копирует файл в Music/YTmus через MediaStore.
-    Работает на Android 10+ без MANAGE_EXTERNAL_STORAGE.
-    Возвращает uri (строку) или None при ошибке.
-    """
-    if platform != "android":
-        # На десктопе — просто shutil
-        dst_dir = os.path.expanduser("~/Music/YTmus")
-        os.makedirs(dst_dir, exist_ok=True)
-        target = safe_target(dst_dir, dst_name)
-        shutil.copy2(src_path, target)
-        return target
-
-    try:
-        from jnius import autoclass
-        PythonActivity = autoclass("org.kivy.android.PythonActivity")
-        MediaStore = autoclass("android.provider.MediaStore")
-        ContentValues = autoclass("android.content.ContentValues")
-
-        activity = PythonActivity.mActivity
-        resolver = activity.getContentResolver()
-
-        ext = os.path.splitext(dst_name)[1].lower()
-        mime = MIME_MAP.get(ext, "audio/*")
-
-        values = ContentValues()
-        values.put(MediaStore.MediaColumns.DISPLAY_NAME, dst_name)
-        values.put(MediaStore.MediaColumns.MIME_TYPE, mime)
-        values.put(MediaStore.MediaColumns.RELATIVE_PATH, RELATIVE_MUSIC_PATH)
-        values.put(MediaStore.MediaColumns.IS_PENDING, 1)
-
-        uri = resolver.insert(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, values)
-        if uri is None:
-            return None
-
-        # Пишем данные через OutputStream
-        with open(src_path, "rb") as f:
-            data = f.read()
-
-        os_stream = resolver.openOutputStream(uri)
-        if os_stream is None:
-            return None
-
-        # pyjnius конвертирует python bytes в Java byte[]
-        os_stream.write(data)
-        os_stream.flush()
-        os_stream.close()
-
-        # Снимаем pending
-        values.clear()
-        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
-        resolver.update(uri, values, None, None)
-
-        return uri.toString()
-    except Exception as e:
-        print(f"mediastore copy error: {e}")
-        return None
-
-
-def delete_via_mediastore(uri_str):
-    """Удаляет файл через MediaStore (для отката при ошибке)."""
-    if platform != "android" or not uri_str:
-        return
-    try:
-        from jnius import autoclass
-        PythonActivity = autoclass("org.kivy.android.PythonActivity")
-        Uri = autoclass("android.net.Uri")
-        activity = PythonActivity.mActivity
-        resolver = activity.getContentResolver()
-        resolver.delete(Uri.parse(uri_str), None, None)
-    except Exception:
-        pass
+        print(f"check_perms error: {e}")
+        return {"audio": False, "notif": False}
 
 
 # ---------------------------------------------------------------------------
@@ -187,7 +70,8 @@ def file_hash(path, chunk=1024 * 1024):
                     break
                 h.update(b)
         return h.hexdigest()
-    except Exception:
+    except Exception as e:
+        print(f"hash error {path}: {e}")
         return None
 
 
@@ -217,6 +101,23 @@ def safe_target(dst_dir, name):
     return candidate
 
 
+def ensure_dst():
+    """Создаёт app-specific папку (не требует разрешений)."""
+    try:
+        os.makedirs(APP_SPECIFIC_DIR, exist_ok=True)
+        test = os.path.join(APP_SPECIFIC_DIR, ".writetest")
+        with open(test, "w") as f:
+            f.write("ok")
+        os.remove(test)
+        return APP_SPECIFIC_DIR
+    except Exception as e:
+        print(f"ensure_dst error: {e}")
+        return None
+
+
+# ---------------------------------------------------------------------------
+# Сканирование через MediaStore
+# ---------------------------------------------------------------------------
 def scan_via_mediastore():
     """Сканирует все аудиофайлы через MediaStore."""
     if platform != "android":
@@ -227,43 +128,116 @@ def scan_via_mediastore():
         PythonActivity = autoclass("org.kivy.android.PythonActivity")
         activity = PythonActivity.mActivity
 
+        # Используем правильные колонки
+        projection = [
+            MediaStore.Audio.Media._ID,
+            MediaStore.Audio.Media.DISPLAY_NAME,
+            MediaStore.Audio.Media.SIZE,
+        ]
+
         cursor = activity.getContentResolver().query(
             MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-            None, None, None, None
+            projection,
+            None, None, None
         )
+
         files = []
         if cursor:
+            count = cursor.getCount()
+            print(f"MediaStore вернул {count} записей")
             while cursor.moveToNext():
-                path_idx = cursor.getColumnIndex(MediaStore.Audio.Media.DATA)
-                title_idx = cursor.getColumnIndex(MediaStore.Audio.Media.DISPLAY_NAME)
-                size_idx = cursor.getColumnIndex(MediaStore.Audio.Media.SIZE)
-                path = cursor.getString(path_idx)
-                title = cursor.getString(title_idx)
-                size = cursor.getLong(size_idx)
-                if path and title:
-                    ext = os.path.splitext(path)[1].lower()
-                    if ext in SUPPORTED_EXTENSIONS:
-                        # Не копируем файлы, которые уже в YTmus
-                        if RELATIVE_MUSIC_PATH not in path:
-                            files.append((path, title, size, ext))
+                try:
+                    id_idx = cursor.getColumnIndex(MediaStore.Audio.Media._ID)
+                    name_idx = cursor.getColumnIndex(MediaStore.Audio.Media.DISPLAY_NAME)
+                    size_idx = cursor.getColumnIndex(MediaStore.Audio.Media.SIZE)
+
+                    file_id = cursor.getLong(id_idx)
+                    name = cursor.getString(name_idx)
+                    size = cursor.getLong(size_idx)
+
+                    if not name:
+                        continue
+
+                    ext = os.path.splitext(name)[1].lower()
+                    if ext not in SUPPORTED_EXTENSIONS:
+                        continue
+
+                    # Строим URI для файла
+                    uri = f"content://media/external/audio/media/{file_id}"
+                    files.append((uri, name, size, ext))
+                except Exception as e:
+                    print(f"cursor error: {e}")
+                    continue
             cursor.close()
         return files
     except Exception as e:
         print(f"MediaStore scan error: {e}")
+        import traceback
+        traceback.print_exc()
         return []
 
 
-def scan_and_collect(progress_cb):
+def read_file_from_uri(uri_str):
+    """Читает файл через ContentResolver по URI."""
+    try:
+        from jnius import autoclass
+        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+        Uri = autoclass("android.net.Uri")
+        activity = PythonActivity.mActivity
+        resolver = activity.getContentResolver()
+
+        uri = Uri.parse(uri_str)
+        is_stream = resolver.openInputStream(uri)
+        if is_stream is None:
+            return None
+
+        # Читаем через буфер
+        data = bytearray()
+        buf = bytes(65536)
+        while True:
+            n = is_stream.read(buf)
+            if n <= 0:
+                break
+            data.extend(buf[:n])
+        is_stream.close()
+        return bytes(data)
+    except Exception as e:
+        print(f"read uri error: {e}")
+        return None
+
+
+def copy_file_to_dst(src_uri, dst_name, dst_dir):
+    """Копирует файл из MediaStore в app-specific папку."""
+    try:
+        data = read_file_from_uri(src_uri)
+        if data is None:
+            return False
+
+        target = safe_target(dst_dir, dst_name)
+        with open(target, "wb") as f:
+            f.write(data)
+        return True
+    except Exception as e:
+        print(f"copy error: {e}")
+        return False
+
+
+def scan_and_collect(dst_dir, progress_cb):
     init_db()
+
+    # 1. Сканируем
     all_files = scan_via_mediastore()
     progress_cb(("scanned", len(all_files)))
+
     if not all_files:
         return {"copied": 0, "dupes": 0, "errors": 0}
 
+    # 2. Группируем по размеру
     by_size = {}
-    for path, name, size, ext in all_files:
-        by_size.setdefault(size, []).append((path, name, ext))
+    for uri, name, size, ext in all_files:
+        by_size.setdefault(size, []).append((uri, name, ext))
 
+    # 3. Дедупликация и копирование
     seen_hashes = set()
     copied = 0
     skipped_dupes = 0
@@ -273,31 +247,39 @@ def scan_and_collect(progress_cb):
     c = conn.cursor()
 
     for size, group in by_size.items():
-        for path, name, ext in group:
-            h = file_hash(path)
-            if h is None:
+        for uri, name, ext in group:
+            # Читаем данные для хеша
+            data = read_file_from_uri(uri)
+            if data is None:
                 errors += 1
                 continue
+
+            h = hashlib.md5(data).hexdigest()
+
             if h in seen_hashes:
                 skipped_dupes += 1
                 continue
             seen_hashes.add(h)
+
             c.execute("SELECT 1 FROM tracks WHERE md5=?", (h,))
             if c.fetchone():
                 skipped_dupes += 1
                 continue
 
-            uri = copy_via_mediastore(path, name)
-            if uri is None:
+            # Сохраняем в dst_dir
+            target = safe_target(dst_dir, name)
+            try:
+                with open(target, "wb") as f:
+                    f.write(data)
+                c.execute(
+                    "INSERT INTO tracks(path, title, ext, size, md5, orig_path) VALUES (?,?,?,?,?,?)",
+                    (target, os.path.splitext(name)[0], ext, size, h, uri)
+                )
+                copied += 1
+                progress_cb(("copied", copied))
+            except Exception as e:
+                print(f"save error: {e}")
                 errors += 1
-                continue
-
-            c.execute(
-                "INSERT INTO tracks(path, title, ext, size, md5, orig_path) VALUES (?,?,?,?,?,?)",
-                (uri, os.path.splitext(name)[0], ext, size, h, path)
-            )
-            copied += 1
-            progress_cb(("copied", copied))
 
     conn.commit()
     conn.close()
@@ -343,7 +325,7 @@ MDScreen:
 
         MDLabel:
             id: perms_label
-            text: "Права: проверка..."
+            text: "Права: ..."
             halign: "center"
             theme_text_color: "Hint"
             font_style: "Caption"
@@ -371,92 +353,59 @@ class MusicApp(MDApp):
         return Builder.load_string(KV)
 
     def on_start(self):
-        # Запрашиваем разрешения при старте
-        Clock.schedule_once(lambda dt: request_runtime_permissions(), 0.5)
-        Clock.schedule_once(lambda dt: self._update_perms_label(), 1.5)
+        # Запрашиваем разрешения через 0.5 сек после старта
+        Clock.schedule_once(lambda dt: request_perms(), 0.5)
+        Clock.schedule_once(lambda dt: self.update_perms_label(), 1.5)
 
-    def _update_perms_label(self):
-        try:
-            from jnius import autoclass
-            PythonActivity = autoclass("org.kivy.android.PythonActivity")
-            PackageManager = autoclass("android.content.pm.PackageManager")
-            activity = PythonActivity.mActivity
-            audio_ok = activity.checkSelfPermission(
-                "android.permission.READ_MEDIA_AUDIO"
-            ) == PackageManager.PERMISSION_GRANTED
-            notif_ok = activity.checkSelfPermission(
-                "android.permission.POST_NOTIFICATIONS"
-            ) == PackageManager.PERMISSION_GRANTED
-            all_files = check_all_files_access()
-            status = []
-            status.append("Аудио: " + ("OK" if audio_ok else "НЕТ"))
-            status.append("Уведомления: " + ("OK" if notif_ok else "НЕТ"))
-            status.append("Все файлы: " + ("OK" if all_files else "нет (не нужно)"))
-            self.root.ids.perms_label.text = " | ".join(status)
-        except Exception as e:
-            self.root.ids.perms_label.text = f"Ошибка проверки: {e}"
+    def update_perms_label(self):
+        status = check_perms_status()
+        audio = "OK" if status.get("audio") else "НЕТ"
+        notif = "OK" if status.get("notif") else "НЕТ"
+        self.root.ids.perms_label.text = f"Аудио: {audio} | Уведомления: {notif}"
 
     def check_perms(self):
-        self._update_perms_label()
+        self.update_perms_label()
+        # Повторно запрашиваем если нет
+        request_perms()
 
     def start_scan(self):
-        self.root.ids.status_label.text = "Сканирование через MediaStore..."
+        dst = ensure_dst()
+        if dst is None:
+            self.root.ids.status_label.text = "НЕТ ПРАВ на запись!"
+            return
+
+        self.root.ids.status_label.text = "Сканирование..."
         self.root.ids.found_label.text = "Найдено: ..."
         self.root.ids.copied_label.text = "Скопировано: ..."
 
         def progress(kind, n):
             def upd(_):
                 if kind == "scanned":
-                    self.root.ids.found_label.text = f"Найдено файлов: {n}"
+                    self.root.ids.found_label.text = f"Найдено: {n}"
                 elif kind == "copied":
                     self.root.ids.copied_label.text = f"Скопировано: {n}"
             Clock.schedule_once(upd, 0)
 
         def worker():
             try:
-                stats = scan_and_collect(progress)
+                stats = scan_and_collect(dst, progress)
                 Clock.schedule_once(lambda dt: self._done(stats), 0)
             except Exception as e:
-                Clock.schedule_once(lambda dt: self._fail(e), 0)
+                import traceback
+                err = traceback.format_exc()
+                print(err)
+                Clock.schedule_once(lambda dt: self._fail(err), 0)
 
         threading.Thread(target=worker, daemon=True).start()
 
     def _done(self, stats):
-        if stats["copied"] == 0 and stats["errors"] > 0:
-            self.root.ids.status_label.text = "Нет прав на запись!"
-            self._show_perm_dialog()
-        else:
-            self.root.ids.status_label.text = "Готово!"
+        self.root.ids.status_label.text = "Готово!"
         self.root.ids.dupes_label.text = (
             f"Дубликатов: {stats['dupes']}, ошибок: {stats['errors']}"
         )
 
     def _fail(self, e):
-        self.root.ids.status_label.text = f"ОШИБКА: {e}"
-
-    def _show_perm_dialog(self):
-        if getattr(self, "_perm_dialog", None):
-            self._perm_dialog.dismiss()
-        self._perm_dialog = MDDialog(
-            title="Нет прав на запись",
-            text=(
-                "MediaStore не смог создать файлы в Music/YTmus.\n\n"
-                "Варианты:\n"
-                "1. Дать разрешение 'Управление всем хранилищем'\n"
-                "2. Проверить, что приложение имеет доступ к аудио"
-            ),
-            buttons=[
-                MDFlatButton(
-                    text="Отмена",
-                    on_release=lambda _: self._perm_dialog.dismiss()
-                ),
-                MDRaisedButton(
-                    text="Открыть настройки",
-                    on_release=lambda _: (open_all_files_settings(), self._perm_dialog.dismiss())
-                ),
-            ],
-        )
-        self._perm_dialog.open()
+        self.root.ids.status_label.text = f"ОШИБКА: {str(e)[:100]}"
 
     def show_list(self):
         conn = sqlite3.connect(DB_PATH)
