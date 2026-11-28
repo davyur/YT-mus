@@ -441,6 +441,7 @@ class OptimizedTrackList(RecycleView):
         self.app_ref = None
 
     def load_tracks(self, tracks_data):
+        print(f"load_tracks called with {len(tracks_data)} tracks")
         self.data = []
         for track_id, title, artist, album, duration, cover_path in tracks_data:
             if duration > 0:
@@ -457,10 +458,12 @@ class OptimizedTrackList(RecycleView):
                 'duration': duration_str,
                 'cover_path': cover_path or '',
             })
+        print(f"RecycleView data set: {len(self.data)} items")
 
 
-# Регистрируем кастомные классы в Factory (КРИТИЧНО для KV!)
+# Регистрируем кастомные классы в Factory
 Factory.register('OptimizedTrackList', cls=OptimizedTrackList)
+Factory.register('TrackRow', cls=TrackRow)
 
 
 # ---------------------------------------------------------------------------
@@ -540,7 +543,6 @@ ScreenManager:
         MDTopAppBar:
             title: "Библиотека"
             left_action_items: [["arrow-left", lambda x: app.go_main()]]
-            right_action_items: [["refresh", lambda x: app.refresh_list()]]
 
         OptimizedTrackList:
             id: track_list
@@ -624,7 +626,6 @@ class MusicApp(MDApp):
         self.is_playing = False
         self.play_mode = REPEAT_OFF
 
-        # ОДИН раз загружаем KV
         return Builder.load_string(KV)
 
     def on_start(self):
@@ -710,29 +711,48 @@ class MusicApp(MDApp):
         self._err_dialog.open()
 
     def show_list(self):
-        list_screen = self.root.get_screen("list")
-        track_list = list_screen.ids.track_list
-        track_list.app_ref = self
+        """Показывает список треков с диагностикой."""
+        try:
+            print("show_list called")
+            list_screen = self.root.get_screen("list")
+            track_list = list_screen.ids.track_list
+            print(f"track_list: {track_list}")
+            
+            if track_list is None:
+                print("ERROR: track_list is None!")
+                return
+            
+            track_list.app_ref = self
 
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        c.execute("SELECT id, title, artist, album, duration, cover_path FROM tracks ORDER BY title")
-        rows = c.fetchall()
-        conn.close()
+            conn = sqlite3.connect(self.db_path)
+            c = conn.cursor()
+            c.execute("SELECT id, title, artist, album, duration, cover_path FROM tracks ORDER BY title")
+            rows = c.fetchall()
+            conn.close()
+            
+            print(f"Loaded {len(rows)} tracks from DB")
 
-        self.track_queue = [row[0] for row in rows]
-        track_list.load_tracks(rows)
-        self.update_mode_icon()
+            self.track_queue = [row[0] for row in rows]
+            track_list.load_tracks(rows)
+            self.update_mode_icon()
 
-        self.root.current = "list"
-
-    def refresh_list(self):
-        self.show_list()
+            self.root.current = "list"
+            print("Switched to list screen")
+        except Exception as e:
+            err = traceback.format_exc()
+            print(f"show_list error: {err}")
+            try:
+                with open(ERROR_LOG, "w", encoding="utf-8") as f:
+                    f.write(err)
+            except Exception:
+                pass
+            self._last_error = err
 
     # ---------------------------------------------------------------------------
     # Воспроизведение
     # ---------------------------------------------------------------------------
     def play_track(self, track_id):
+        print(f"play_track called with id={track_id}")
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         c.execute("SELECT path, title, artist FROM tracks WHERE id=?", (track_id,))
