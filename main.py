@@ -1,7 +1,7 @@
 from kivy.lang import Builder
 from kivymd.app import MDApp
 from kivymd.uix.dialog import MDDialog
-from kivymd.uix.button import MDFlatButton, MDRaisedButton
+from kivymd.uix.button import MDFlatButton
 import sqlite3
 import os
 import hashlib
@@ -18,7 +18,7 @@ ERROR_LOG = "/data/data/org.davyur.ytmus/files/error.log"
 
 
 # ---------------------------------------------------------------------------
-# Получение путей через Android API
+# Получение путей
 # ---------------------------------------------------------------------------
 def get_app_dirs():
     if platform != "android":
@@ -35,13 +35,17 @@ def get_app_dirs():
         activity = PythonActivity.mActivity
 
         internal_dir = activity.getFilesDir().getAbsolutePath()
-
-        # App-specific папка Music (не требует разрешений на запись)
+        
+        # App-specific папка Music
         external_music = activity.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
         external_dir = external_music.getAbsolutePath() if external_music else internal_dir
 
         dst = os.path.join(external_dir, "YTmus")
         db = os.path.join(internal_dir, "ytmus.db")
+        
+        # Создаём папку сразу
+        os.makedirs(dst, exist_ok=True)
+        
         print(f"DB: {db}\nDST: {dst}")
         return db, dst
     except Exception as e:
@@ -85,53 +89,99 @@ def check_perms_status():
 
 
 # ---------------------------------------------------------------------------
-# Чтение файлов — ДВА способа
+# Сканирование через os.walk (ОСНОВНОЙ метод)
 # ---------------------------------------------------------------------------
-def read_file_by_path(path):
-    """Быстрое чтение через обычный open()."""
+def scan_via_os_walk():
+    """Сканирует /storage/emulated/0/Music через os.walk."""
+    if platform != "android":
+        return []
+    
+    music_dir = "/storage/emulated/0/Music"
+    if not os.path.exists(music_dir):
+        print(f"Папка {music_dir} не существует")
+        return []
+    
+    print(f"Сканируем {music_dir}...")
+    files = []
+    
+    for root, dirs, filenames in os.walk(music_dir):
+        for filename in filenames:
+            ext = os.path.splitext(filename)[1].lower()
+            if ext in SUPPORTED_EXTENSIONS:
+                full_path = os.path.join(root, filename)
+                files.append((full_path, filename, ext))
+    
+    print(f"os.walk нашёл {len(files)} файлов")
+    return files
+
+
+# ---------------------------------------------------------------------------
+# Сканирование через MediaStore (FALLBACK)
+# ---------------------------------------------------------------------------
+def scan_via_mediastore():
+    """Сканирует через MediaStore API."""
+    if platform != "android":
+        return []
+    try:
+        from jnius import autoclass
+        MediaStore = autoclass("android.provider.MediaStore")
+        ContentUris = autoclass("android.content.ContentUris")
+        PythonActivity = autoclass("org.kivy.android.PythonActivity")
+        activity = PythonActivity.mActivity
+
+        projection = [
+            MediaStore.Audio.Media._ID,
+            MediaStore.Audio.Media.DISPLAY_NAME,
+            MediaStore.Audio.Media.DATA,
+        ]
+
+        cursor = activity.getContentResolver().query(
+            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
+            projection, None, None, None
+        )
+
+        files = []
+        if cursor:
+            print(f"MediaStore вернул {cursor.getCount()} записей")
+            while cursor.moveToNext():
+                try:
+                    file_id = cursor.getLong(0)
+                    name = cursor.getString(1)
+                    data_path = cursor.getString(2)
+
+                    if not name:
+                        continue
+
+                    ext = os.path.splitext(name)[1].lower()
+                    if ext not in SUPPORTED_EXTENSIONS:
+                        continue
+
+                    # Если есть прямой путь — используем его
+                    if data_path and os.path.exists(data_path):
+                        files.append((data_path, name, ext))
+                except Exception as e:
+                    print(f"cursor row error: {e}")
+                    continue
+            cursor.close()
+        return files
+    except Exception as e:
+        print(f"MediaStore scan error: {e}")
+        traceback.print_exc()
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Утилиты
+# ---------------------------------------------------------------------------
+def read_file(path):
     try:
         with open(path, "rb") as f:
             return f.read()
     except Exception as e:
-        print(f"read_file_by_path error {path}: {e}")
+        print(f"read error {path}: {e}")
         return None
 
 
-def read_file_by_uri(uri_obj):
-    """Медленное чтение через ContentResolver (fallback)."""
-    try:
-        from jnius import autoclass
-        PythonActivity = autoclass("org.kivy.android.PythonActivity")
-        BufferedInputStream = autoclass("java.io.BufferedInputStream")
-        ByteArrayOutputStream = autoclass("java.io.ByteArrayOutputStream")
-        activity = PythonActivity.mActivity
-        resolver = activity.getContentResolver()
-
-        is_stream = resolver.openInputStream(uri_obj)
-        if is_stream is None:
-            return None
-
-        bis = BufferedInputStream(is_stream)
-        baos = ByteArrayOutputStream()
-
-        # Побайтовое чтение — медленно, но надёжно в pyjnius
-        while True:
-            b = bis.read()
-            if b == -1:
-                break
-            baos.write(b)
-
-        bis.close()
-        baos.close()
-        return bytes(baos.toByteArray())
-    except Exception as e:
-        print(f"read_file_by_uri error: {e}")
-        return None
-
-
-# ---------------------------------------------------------------------------
-# БД
-# ---------------------------------------------------------------------------
 def init_db(db_path):
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
@@ -159,92 +209,29 @@ def safe_target(dst_dir, name):
 
 
 # ---------------------------------------------------------------------------
-# Сканирование через MediaStore
+# Основная функция сканирования
 # ---------------------------------------------------------------------------
-def scan_via_mediastore():
-    """
-    Возвращает список кортежей: (readable_path_or_None, uri_obj_or_None, name, ext)
-    Приоритет — _data (прямой путь). Fallback — URI.
-    """
-    if platform != "android":
-        return []
-    try:
-        from jnius import autoclass
-        MediaStore = autoclass("android.provider.MediaStore")
-        ContentUris = autoclass("android.content.ContentUris")
-        PythonActivity = autoclass("org.kivy.android.PythonActivity")
-        activity = PythonActivity.mActivity
-
-        projection = [
-            MediaStore.Audio.Media._ID,
-            MediaStore.Audio.Media.DISPLAY_NAME,
-            MediaStore.Audio.Media.SIZE,
-            MediaStore.Audio.Media.DATA,  # прямой путь к файлу
-        ]
-
-        cursor = activity.getContentResolver().query(
-            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-            projection, None, None, None
-        )
-
-        files = []
-        if cursor:
-            print(f"MediaStore вернул {cursor.getCount()} записей")
-            while cursor.moveToNext():
-                try:
-                    file_id = cursor.getLong(0)
-                    name = cursor.getString(1)
-                    size = cursor.getLong(2)
-                    data_path = cursor.getString(3)  # может быть None
-
-                    if not name:
-                        continue
-
-                    ext = os.path.splitext(name)[1].lower()
-                    if ext not in SUPPORTED_EXTENSIONS:
-                        continue
-
-                    # Строим правильный URI через ContentUris
-                    uri_obj = ContentUris.withAppendedId(
-                        MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-                        file_id
-                    )
-
-                    # Проверяем, существует ли прямой путь
-                    if data_path and os.path.exists(data_path):
-                        files.append((data_path, None, name, ext))
-                    else:
-                        files.append((None, uri_obj, name, ext))
-                except Exception as e:
-                    print(f"cursor row error: {e}")
-                    continue
-            cursor.close()
-        return files
-    except Exception as e:
-        print(f"MediaStore scan error: {e}")
-        traceback.print_exc()
-        return []
-
-
 def scan_and_collect(db_path, dst_dir, progress_cb):
     init_db(db_path)
 
-    # Создаём папку и проверяем запись
+    # Создаём папку
     os.makedirs(dst_dir, exist_ok=True)
-    test_file = os.path.join(dst_dir, ".test_write")
-    with open(test_file, "w") as f:
-        f.write("ok")
-    os.remove(test_file)
-    print(f"Папка готова к записи: {dst_dir}")
+    print(f"Папка назначения: {dst_dir}")
 
-    # Сканируем
-    all_files = scan_via_mediastore()
+    # 1. Пробуем os.walk
+    all_files = scan_via_os_walk()
+    
+    # 2. Если os.walk ничего не нашёл — пробуем MediaStore
+    if not all_files:
+        print("os.walk не нашёл файлы, пробуем MediaStore...")
+        all_files = scan_via_mediastore()
+    
     progress_cb(("scanned", len(all_files)))
 
     if not all_files:
         return {"copied": 0, "dupes": 0, "errors": 0}
 
-    # Дедупликация по md5
+    # Дедупликация и копирование
     seen_hashes = set()
     copied = 0
     skipped_dupes = 0
@@ -253,14 +240,8 @@ def scan_and_collect(db_path, dst_dir, progress_cb):
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
 
-    for data_path, uri_obj, name, ext in all_files:
-        # Читаем файл — сначала по пути, потом по URI
-        data = None
-        if data_path:
-            data = read_file_by_path(data_path)
-        if data is None and uri_obj is not None:
-            data = read_file_by_uri(uri_obj)
-
+    for full_path, name, ext in all_files:
+        data = read_file(full_path)
         if data is None:
             errors += 1
             continue
@@ -282,10 +263,9 @@ def scan_and_collect(db_path, dst_dir, progress_cb):
         try:
             with open(target, "wb") as f:
                 f.write(data)
-            source = data_path if data_path else str(uri_obj)
             c.execute(
                 "INSERT INTO tracks(path, title, ext, size, md5, source) VALUES (?,?,?,?,?,?)",
-                (target, os.path.splitext(name)[0], ext, size, h, source)
+                (target, os.path.splitext(name)[0], ext, size, h, full_path)
             )
             copied += 1
             progress_cb(("copied", copied))
@@ -391,7 +371,6 @@ class MusicApp(MDApp):
         self.root.ids.found_label.text = "Найдено: ..."
         self.root.ids.copied_label.text = "Скопировано: ..."
 
-        # ИСПРАВЛЕНО: progress принимает кортеж одним аргументом
         def progress(args):
             kind, n = args
             def upd(_):
