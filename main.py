@@ -1,7 +1,7 @@
 from kivy.lang import Builder
 from kivymd.app import MDApp
 from kivymd.uix.dialog import MDDialog
-from kivymd.uix.button import MDFlatButton, MDIconButton
+from kivymd.uix.button import MDFlatButton
 from kivymd.uix.list import MDList, TwoLineListItem
 from kivy.uix.screenmanager import ScreenManager, Screen
 from kivy.core.audio import SoundLoader
@@ -12,12 +12,19 @@ import os
 import hashlib
 import threading
 import traceback
+import random
 
 # ---------------------------------------------------------------------------
 # Пути и константы
 # ---------------------------------------------------------------------------
 SUPPORTED_EXTENSIONS = {".mp3", ".m4a", ".flac", ".wav", ".ogg", ".aac", ".wma"}
 ERROR_LOG = "/data/data/org.davyur.ytmus/files/error.log"
+
+# Режимы воспроизведения
+REPEAT_OFF = 0
+REPEAT_ALL = 1
+REPEAT_ONE = 2
+SHUFFLE = 3
 
 
 # ---------------------------------------------------------------------------
@@ -439,7 +446,7 @@ ScreenManager:
         # Мини-плеер внизу
         MDCard:
             size_hint_y: None
-            height: dp(100)
+            height: dp(140)
             padding: dp(8)
             radius: [dp(16), dp(16), 0, 0]
             elevation: 8
@@ -485,6 +492,11 @@ ScreenManager:
                     MDIconButton:
                         icon: "stop"
                         on_release: app.stop_track()
+
+                    MDIconButton:
+                        id: mode_btn
+                        icon: "repeat"
+                        on_release: app.cycle_mode()
 """
 
 
@@ -510,6 +522,7 @@ class MusicApp(MDApp):
         self.track_queue = []  # список ID треков
         self.queue_index = -1
         self.is_playing = False
+        self.play_mode = REPEAT_OFF  # режим воспроизведения
 
         # Запуск обновления прогресса
         Clock.schedule_interval(self.update_progress, 1.0)
@@ -613,7 +626,7 @@ class MusicApp(MDApp):
         rows = c.fetchall()
         conn.close()
 
-        self.track_queue = [row[0] for row in rows]  # сохраняем очередь ID
+        self.track_queue = [row[0] for row in rows]
 
         if not rows:
             item = TwoLineListItem(
@@ -634,11 +647,11 @@ class MusicApp(MDApp):
                     text=title,
                     secondary_text=f"{artist} • {album} • {duration_str}"
                 )
-                # Привязываем нажатие к воспроизведению
                 item.bind(on_release=lambda x, tid=track_id: self.play_track(tid))
                 tracks_list.add_widget(item)
 
         self.root.current = "list"
+        self.update_mode_icon()
 
     # ---------------------------------------------------------------------------
     # Воспроизведение
@@ -670,6 +683,11 @@ class MusicApp(MDApp):
 
         self.current_track_id = track_id
         self.current_track_path = path
+        
+        # Обновляем queue_index
+        if track_id in self.track_queue:
+            self.queue_index = self.track_queue.index(track_id)
+        
         self.sound.play()
         self.is_playing = True
 
@@ -716,24 +734,62 @@ class MusicApp(MDApp):
         list_screen.ids.progress_slider.value = 0
 
     def next_track(self):
-        """Следующий трек."""
-        if not self.track_queue or self.current_track_id is None:
+        """Следующий трек с учётом режима."""
+        if not self.track_queue:
             return
 
-        self.queue_index = self.track_queue.index(self.current_track_id)
-        if self.queue_index < len(self.track_queue) - 1:
+        if self.play_mode == REPEAT_ONE:
+            # Повтор текущего трека
+            if self.current_track_id:
+                self.play_track(self.current_track_id)
+            return
+
+        if self.play_mode == SHUFFLE:
+            # Случайный трек
+            if len(self.track_queue) > 1:
+                next_id = random.choice(self.track_queue)
+                while next_id == self.current_track_id and len(self.track_queue) > 1:
+                    next_id = random.choice(self.track_queue)
+                self.play_track(next_id)
+            return
+
+        # REPEAT_OFF или REPEAT_ALL
+        if self.queue_index < 0:
+            self.queue_index = 0
+        elif self.queue_index < len(self.track_queue) - 1:
             self.queue_index += 1
-            self.play_track(self.track_queue[self.queue_index])
+        elif self.play_mode == REPEAT_ALL:
+            self.queue_index = 0
+        else:
+            # REPEAT_OFF и конец списка
+            self.stop_track()
+            return
+
+        self.play_track(self.track_queue[self.queue_index])
 
     def prev_track(self):
         """Предыдущий трек."""
-        if not self.track_queue or self.current_track_id is None:
+        if not self.track_queue or self.queue_index <= 0:
             return
 
-        self.queue_index = self.track_queue.index(self.current_track_id)
-        if self.queue_index > 0:
-            self.queue_index -= 1
-            self.play_track(self.track_queue[self.queue_index])
+        self.queue_index -= 1
+        self.play_track(self.track_queue[self.queue_index])
+
+    def cycle_mode(self):
+        """Переключение режимов воспроизведения."""
+        self.play_mode = (self.play_mode + 1) % 4
+        self.update_mode_icon()
+
+    def update_mode_icon(self):
+        """Обновляет иконку режима."""
+        list_screen = self.root.get_screen("list")
+        mode_icons = {
+            REPEAT_OFF: "repeat-off",
+            REPEAT_ALL: "repeat",
+            REPEAT_ONE: "repeat-once",
+            SHUFFLE: "shuffle",
+        }
+        list_screen.ids.mode_btn.icon = mode_icons.get(self.play_mode, "repeat-off")
 
     def update_progress(self, dt):
         """Обновление прогресс-бара каждую секунду."""
