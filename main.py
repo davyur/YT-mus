@@ -2,10 +2,7 @@ from kivy.lang import Builder
 from kivymd.app import MDApp
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.button import MDFlatButton
-from kivymd.uix.list import MDList, TwoLineListItem, OneLineAvatarListItem
-from kivymd.uix.boxlayout import MDBoxLayout
-from kivymd.uix.label import MDLabel
-from kivymd.uix.scrollview import ScrollView
+from kivymd.uix.list import MDList, TwoLineListItem
 from kivy.uix.screenmanager import ScreenManager, Screen
 import sqlite3
 import os
@@ -95,13 +92,9 @@ def check_perms_status():
 
 
 # ---------------------------------------------------------------------------
-# Парсинг метаданных через mutagen
+# Парсинг метаданных
 # ---------------------------------------------------------------------------
 def parse_metadata(file_path):
-    """
-    Извлекает метаданные из аудиофайла.
-    Возвращает dict: {title, artist, album, duration, cover_path}
-    """
     result = {
         "title": os.path.splitext(os.path.basename(file_path))[0],
         "artist": "Неизвестный исполнитель",
@@ -112,24 +105,19 @@ def parse_metadata(file_path):
 
     try:
         from mutagen import File as MutagenFile
-        from mutagen.mp3 import MP3
-        from mutagen.mp4 import MP4
-        from mutagen.flac import FLAC
-        from mutagen.id3 import ID3, APIC
 
         audio = MutagenFile(file_path)
         if audio is None:
             return result
 
-        # Длительность (есть у всех форматов)
         if hasattr(audio, "info") and hasattr(audio.info, "length"):
             result["duration"] = int(audio.info.length)
 
         ext = os.path.splitext(file_path)[1].lower()
 
-        # MP3 с ID3 тегами
         if ext == ".mp3":
             try:
+                from mutagen.id3 import ID3, APIC
                 tags = ID3(file_path)
                 if "TIT2" in tags:
                     result["title"] = str(tags["TIT2"].text[0]) if tags["TIT2"].text else result["title"]
@@ -138,7 +126,6 @@ def parse_metadata(file_path):
                 if "TALB" in tags:
                     result["album"] = str(tags["TALB"].text[0]) if tags["TALB"].text else result["album"]
 
-                # Обложка
                 for tag in tags.values():
                     if isinstance(tag, APIC):
                         cover_path = save_cover(file_path, tag.data)
@@ -148,9 +135,9 @@ def parse_metadata(file_path):
             except Exception:
                 pass
 
-        # M4A / MP4
         elif ext == ".m4a":
             try:
+                from mutagen.mp4 import MP4
                 tags = MP4(file_path)
                 if "\xa9nam" in tags:
                     result["title"] = tags["\xa9nam"][0]
@@ -159,7 +146,6 @@ def parse_metadata(file_path):
                 if "\xa9alb" in tags:
                     result["album"] = tags["\xa9alb"][0]
 
-                # Обложка
                 if "covr" in tags:
                     cover_data = tags["covr"][0]
                     cover_path = save_cover(file_path, bytes(cover_data))
@@ -168,9 +154,9 @@ def parse_metadata(file_path):
             except Exception:
                 pass
 
-        # FLAC
         elif ext == ".flac":
             try:
+                from mutagen.flac import FLAC
                 tags = FLAC(file_path)
                 if "title" in tags:
                     result["title"] = tags["title"][0]
@@ -179,7 +165,6 @@ def parse_metadata(file_path):
                 if "album" in tags:
                     result["album"] = tags["album"][0]
 
-                # Обложка
                 if tags.pictures:
                     cover_data = tags.pictures[0].data
                     cover_path = save_cover(file_path, cover_data)
@@ -195,13 +180,10 @@ def parse_metadata(file_path):
 
 
 def save_cover(file_path, cover_data):
-    """Сохраняет обложку в папку covers. Возвращает путь или пустую строку."""
     if not cover_data:
         return ""
     try:
-        from kivy.utils import platform as plat
-        # Определяем папку covers
-        if plat == "android":
+        if platform == "android":
             from jnius import autoclass
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
             covers_dir = os.path.join(PythonActivity.mActivity.getFilesDir().getAbsolutePath(), "covers")
@@ -210,7 +192,6 @@ def save_cover(file_path, cover_data):
 
         os.makedirs(covers_dir, exist_ok=True)
 
-        # Уникальное имя по хешу файла
         file_hash = hashlib.md5(file_path.encode()).hexdigest()[:8]
         cover_path = os.path.join(covers_dir, f"{file_hash}.jpg")
 
@@ -302,14 +283,12 @@ def scan_and_collect(db_path, dst_dir, covers_dir, progress_cb):
     os.makedirs(covers_dir, exist_ok=True)
     print(f"Папка назначения: {dst_dir}")
 
-    # 1. Сканируем
     all_files = scan_via_os_walk()
     progress_cb(("scanned", len(all_files), "total"))
 
     if not all_files:
         return {"copied": 0, "dupes": 0, "errors": 0}
 
-    # 2. Дедупликация и копирование с парсингом метаданных
     seen_hashes = set()
     copied = 0
     skipped_dupes = 0
@@ -320,10 +299,8 @@ def scan_and_collect(db_path, dst_dir, covers_dir, progress_cb):
     c = conn.cursor()
 
     for idx, (full_path, name, ext) in enumerate(all_files, 1):
-        # Прогресс парсинга
         progress_cb(("parsing", idx, total))
 
-        # Читаем файл
         data = read_file(full_path)
         if data is None:
             errors += 1
@@ -342,10 +319,8 @@ def scan_and_collect(db_path, dst_dir, covers_dir, progress_cb):
             skipped_dupes += 1
             continue
 
-        # Парсим метаданные
         meta = parse_metadata(full_path)
 
-        # Копируем файл
         target = safe_target(dst_dir, name)
         try:
             with open(target, "wb") as f:
@@ -454,7 +429,7 @@ ScreenManager:
 
         MDTopAppBar:
             title: "Библиотека"
-            left_action_items: [["arrow-left", lambda x: app.root.current = "main"]]
+            left_action_items: [["arrow-left", lambda x: app.go_main()]]
 
         ScrollView:
             MDList:
@@ -485,6 +460,10 @@ class MusicApp(MDApp):
             lambda dt: setattr(self.root.get_screen("main").ids.path_label, "text",
                                f"Папка: {self.dst_dir}"), 2.0
         )
+
+    def go_main(self):
+        """Переход на главный экран (вызывается из KV)."""
+        self.root.current = "main"
 
     def update_perms_label(self):
         status = check_perms_status()
@@ -562,7 +541,6 @@ class MusicApp(MDApp):
         self._err_dialog.open()
 
     def show_list(self):
-        """Показывает список треков с метаданными."""
         list_screen = self.root.get_screen("list")
         tracks_list = list_screen.ids.tracks_list
         tracks_list.clear_widgets()
@@ -574,10 +552,13 @@ class MusicApp(MDApp):
         conn.close()
 
         if not rows:
-            tracks_list.add_widget(OneLineAvatarListItem(text="База пуста"))
+            item = TwoLineListItem(
+                text="База пуста",
+                secondary_text="Нажмите 'Сканировать'"
+            )
+            tracks_list.add_widget(item)
         else:
             for title, artist, album, duration, cover_path in rows:
-                # Форматируем длительность
                 if duration > 0:
                     mins = duration // 60
                     secs = duration % 60
