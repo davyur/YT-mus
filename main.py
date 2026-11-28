@@ -336,7 +336,7 @@ def scan_and_collect(db_path, dst_dir, covers_dir, progress_cb):
 
 
 # ---------------------------------------------------------------------------
-# UI — RecycleView через KV (надёжнее)
+# UI — RecycleView через KV
 # ---------------------------------------------------------------------------
 KV = """
 #:import dp kivy.metrics.dp
@@ -415,7 +415,6 @@ ScreenManager:
             title: "Библиотека"
             left_action_items: [["arrow-left", lambda x: app.go_main()]]
 
-        # RecycleView для быстрого списка
         RecycleView:
             id: rv
             viewclass: "TrackItem"
@@ -510,8 +509,7 @@ ScreenManager:
         size_hint_x: None
         width: dp(50)
 
-    on_touch_down:
-        if self.collide_point(*args[1].pos): app.play_track(root.track_id)
+    on_touch_down: app.play_track(root.track_id) if self.collide_point(*args[1].pos) else None
 """
 
 
@@ -538,7 +536,6 @@ class MusicApp(MDApp):
         self.is_playing = False
         self.play_mode = REPEAT_OFF
 
-        # Данные для RecycleView
         self.track_data = []
 
         Clock.schedule_interval(self.update_progress, 1.0)
@@ -628,7 +625,6 @@ class MusicApp(MDApp):
         self._err_dialog.open()
 
     def show_list(self):
-        """Загружает список треков в RecycleView."""
         try:
             conn = sqlite3.connect(self.db_path)
             c = conn.cursor()
@@ -640,7 +636,6 @@ class MusicApp(MDApp):
 
             self.track_queue = [row[0] for row in rows]
             
-            # Формируем данные для RecycleView
             self.track_data = []
             for track_id, title, artist, album, duration in rows:
                 if duration > 0:
@@ -659,7 +654,6 @@ class MusicApp(MDApp):
 
             print(f"Track data prepared: {len(self.track_data)} items")
 
-            # Устанавливаем данные в RecycleView
             list_screen = self.root.get_screen("list")
             rv = list_screen.ids.rv
             rv.data = self.track_data
