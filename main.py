@@ -2,6 +2,11 @@ from kivy.lang import Builder
 from kivymd.app import MDApp
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.button import MDFlatButton
+from kivymd.uix.list import MDList, TwoLineListItem, OneLineAvatarListItem
+from kivymd.uix.boxlayout import MDBoxLayout
+from kivymd.uix.label import MDLabel
+from kivymd.uix.scrollview import ScrollView
+from kivy.uix.screenmanager import ScreenManager, Screen
 import sqlite3
 import os
 import hashlib
@@ -26,6 +31,7 @@ def get_app_dirs():
         return (
             os.path.join(home, ".ytmus", "ytmus.db"),
             os.path.join(home, ".ytmus", "YTmus"),
+            os.path.join(home, ".ytmus", "covers"),
         )
 
     try:
@@ -35,24 +41,24 @@ def get_app_dirs():
         activity = PythonActivity.mActivity
 
         internal_dir = activity.getFilesDir().getAbsolutePath()
-        
-        # App-specific папка Music
         external_music = activity.getExternalFilesDir(Environment.DIRECTORY_MUSIC)
         external_dir = external_music.getAbsolutePath() if external_music else internal_dir
 
         dst = os.path.join(external_dir, "YTmus")
         db = os.path.join(internal_dir, "ytmus.db")
-        
-        # Создаём папку сразу
+        covers = os.path.join(internal_dir, "covers")
+
         os.makedirs(dst, exist_ok=True)
-        
-        print(f"DB: {db}\nDST: {dst}")
-        return db, dst
+        os.makedirs(covers, exist_ok=True)
+
+        print(f"DB: {db}\nDST: {dst}\nCOVERS: {covers}")
+        return db, dst, covers
     except Exception as e:
         print(f"get_app_dirs error: {e}")
         return (
             "/data/data/org.davyur.ytmus/files/ytmus.db",
             "/data/data/org.davyur.ytmus/files/YTmus",
+            "/data/data/org.davyur.ytmus/files/covers",
         )
 
 
@@ -89,85 +95,159 @@ def check_perms_status():
 
 
 # ---------------------------------------------------------------------------
-# Сканирование через os.walk (ОСНОВНОЙ метод)
+# Парсинг метаданных через mutagen
+# ---------------------------------------------------------------------------
+def parse_metadata(file_path):
+    """
+    Извлекает метаданные из аудиофайла.
+    Возвращает dict: {title, artist, album, duration, cover_path}
+    """
+    result = {
+        "title": os.path.splitext(os.path.basename(file_path))[0],
+        "artist": "Неизвестный исполнитель",
+        "album": "Неизвестный альбом",
+        "duration": 0,
+        "cover_path": "",
+    }
+
+    try:
+        from mutagen import File as MutagenFile
+        from mutagen.mp3 import MP3
+        from mutagen.mp4 import MP4
+        from mutagen.flac import FLAC
+        from mutagen.id3 import ID3, APIC
+
+        audio = MutagenFile(file_path)
+        if audio is None:
+            return result
+
+        # Длительность (есть у всех форматов)
+        if hasattr(audio, "info") and hasattr(audio.info, "length"):
+            result["duration"] = int(audio.info.length)
+
+        ext = os.path.splitext(file_path)[1].lower()
+
+        # MP3 с ID3 тегами
+        if ext == ".mp3":
+            try:
+                tags = ID3(file_path)
+                if "TIT2" in tags:
+                    result["title"] = str(tags["TIT2"].text[0]) if tags["TIT2"].text else result["title"]
+                if "TPE1" in tags:
+                    result["artist"] = str(tags["TPE1"].text[0]) if tags["TPE1"].text else result["artist"]
+                if "TALB" in tags:
+                    result["album"] = str(tags["TALB"].text[0]) if tags["TALB"].text else result["album"]
+
+                # Обложка
+                for tag in tags.values():
+                    if isinstance(tag, APIC):
+                        cover_path = save_cover(file_path, tag.data)
+                        if cover_path:
+                            result["cover_path"] = cover_path
+                        break
+            except Exception:
+                pass
+
+        # M4A / MP4
+        elif ext == ".m4a":
+            try:
+                tags = MP4(file_path)
+                if "\xa9nam" in tags:
+                    result["title"] = tags["\xa9nam"][0]
+                if "\xa9ART" in tags:
+                    result["artist"] = tags["\xa9ART"][0]
+                if "\xa9alb" in tags:
+                    result["album"] = tags["\xa9alb"][0]
+
+                # Обложка
+                if "covr" in tags:
+                    cover_data = tags["covr"][0]
+                    cover_path = save_cover(file_path, bytes(cover_data))
+                    if cover_path:
+                        result["cover_path"] = cover_path
+            except Exception:
+                pass
+
+        # FLAC
+        elif ext == ".flac":
+            try:
+                tags = FLAC(file_path)
+                if "title" in tags:
+                    result["title"] = tags["title"][0]
+                if "artist" in tags:
+                    result["artist"] = tags["artist"][0]
+                if "album" in tags:
+                    result["album"] = tags["album"][0]
+
+                # Обложка
+                if tags.pictures:
+                    cover_data = tags.pictures[0].data
+                    cover_path = save_cover(file_path, cover_data)
+                    if cover_path:
+                        result["cover_path"] = cover_path
+            except Exception:
+                pass
+
+    except Exception as e:
+        print(f"parse_metadata error {file_path}: {e}")
+
+    return result
+
+
+def save_cover(file_path, cover_data):
+    """Сохраняет обложку в папку covers. Возвращает путь или пустую строку."""
+    if not cover_data:
+        return ""
+    try:
+        from kivy.utils import platform as plat
+        # Определяем папку covers
+        if plat == "android":
+            from jnius import autoclass
+            PythonActivity = autoclass("org.kivy.android.PythonActivity")
+            covers_dir = os.path.join(PythonActivity.mActivity.getFilesDir().getAbsolutePath(), "covers")
+        else:
+            covers_dir = os.path.join(os.path.expanduser("~"), ".ytmus", "covers")
+
+        os.makedirs(covers_dir, exist_ok=True)
+
+        # Уникальное имя по хешу файла
+        file_hash = hashlib.md5(file_path.encode()).hexdigest()[:8]
+        cover_path = os.path.join(covers_dir, f"{file_hash}.jpg")
+
+        if not os.path.exists(cover_path):
+            with open(cover_path, "wb") as f:
+                f.write(cover_data)
+
+        return cover_path
+    except Exception as e:
+        print(f"save_cover error: {e}")
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# Сканирование
 # ---------------------------------------------------------------------------
 def scan_via_os_walk():
-    """Сканирует /storage/emulated/0/Music через os.walk."""
     if platform != "android":
         return []
-    
+
     music_dir = "/storage/emulated/0/Music"
     if not os.path.exists(music_dir):
         print(f"Папка {music_dir} не существует")
         return []
-    
+
     print(f"Сканируем {music_dir}...")
     files = []
-    
+
     for root, dirs, filenames in os.walk(music_dir):
         for filename in filenames:
             ext = os.path.splitext(filename)[1].lower()
             if ext in SUPPORTED_EXTENSIONS:
                 full_path = os.path.join(root, filename)
                 files.append((full_path, filename, ext))
-    
+
     print(f"os.walk нашёл {len(files)} файлов")
     return files
-
-
-# ---------------------------------------------------------------------------
-# Сканирование через MediaStore (FALLBACK)
-# ---------------------------------------------------------------------------
-def scan_via_mediastore():
-    """Сканирует через MediaStore API."""
-    if platform != "android":
-        return []
-    try:
-        from jnius import autoclass
-        MediaStore = autoclass("android.provider.MediaStore")
-        ContentUris = autoclass("android.content.ContentUris")
-        PythonActivity = autoclass("org.kivy.android.PythonActivity")
-        activity = PythonActivity.mActivity
-
-        projection = [
-            MediaStore.Audio.Media._ID,
-            MediaStore.Audio.Media.DISPLAY_NAME,
-            MediaStore.Audio.Media.DATA,
-        ]
-
-        cursor = activity.getContentResolver().query(
-            MediaStore.Audio.Media.EXTERNAL_CONTENT_URI,
-            projection, None, None, None
-        )
-
-        files = []
-        if cursor:
-            print(f"MediaStore вернул {cursor.getCount()} записей")
-            while cursor.moveToNext():
-                try:
-                    file_id = cursor.getLong(0)
-                    name = cursor.getString(1)
-                    data_path = cursor.getString(2)
-
-                    if not name:
-                        continue
-
-                    ext = os.path.splitext(name)[1].lower()
-                    if ext not in SUPPORTED_EXTENSIONS:
-                        continue
-
-                    # Если есть прямой путь — используем его
-                    if data_path and os.path.exists(data_path):
-                        files.append((data_path, name, ext))
-                except Exception as e:
-                    print(f"cursor row error: {e}")
-                    continue
-            cursor.close()
-        return files
-    except Exception as e:
-        print(f"MediaStore scan error: {e}")
-        traceback.print_exc()
-        return []
 
 
 # ---------------------------------------------------------------------------
@@ -189,9 +269,13 @@ def init_db(db_path):
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         path TEXT UNIQUE,
         title TEXT,
+        artist TEXT,
+        album TEXT,
         ext TEXT,
         size INTEGER,
+        duration INTEGER,
         md5 TEXT,
+        cover_path TEXT,
         source TEXT
     )""")
     conn.commit()
@@ -211,36 +295,35 @@ def safe_target(dst_dir, name):
 # ---------------------------------------------------------------------------
 # Основная функция сканирования
 # ---------------------------------------------------------------------------
-def scan_and_collect(db_path, dst_dir, progress_cb):
+def scan_and_collect(db_path, dst_dir, covers_dir, progress_cb):
     init_db(db_path)
 
-    # Создаём папку
     os.makedirs(dst_dir, exist_ok=True)
+    os.makedirs(covers_dir, exist_ok=True)
     print(f"Папка назначения: {dst_dir}")
 
-    # 1. Пробуем os.walk
+    # 1. Сканируем
     all_files = scan_via_os_walk()
-    
-    # 2. Если os.walk ничего не нашёл — пробуем MediaStore
-    if not all_files:
-        print("os.walk не нашёл файлы, пробуем MediaStore...")
-        all_files = scan_via_mediastore()
-    
-    progress_cb(("scanned", len(all_files)))
+    progress_cb(("scanned", len(all_files), "total"))
 
     if not all_files:
         return {"copied": 0, "dupes": 0, "errors": 0}
 
-    # Дедупликация и копирование
+    # 2. Дедупликация и копирование с парсингом метаданных
     seen_hashes = set()
     copied = 0
     skipped_dupes = 0
     errors = 0
+    total = len(all_files)
 
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
 
-    for full_path, name, ext in all_files:
+    for idx, (full_path, name, ext) in enumerate(all_files, 1):
+        # Прогресс парсинга
+        progress_cb(("parsing", idx, total))
+
+        # Читаем файл
         data = read_file(full_path)
         if data is None:
             errors += 1
@@ -259,16 +342,33 @@ def scan_and_collect(db_path, dst_dir, progress_cb):
             skipped_dupes += 1
             continue
 
+        # Парсим метаданные
+        meta = parse_metadata(full_path)
+
+        # Копируем файл
         target = safe_target(dst_dir, name)
         try:
             with open(target, "wb") as f:
                 f.write(data)
+
             c.execute(
-                "INSERT INTO tracks(path, title, ext, size, md5, source) VALUES (?,?,?,?,?,?)",
-                (target, os.path.splitext(name)[0], ext, size, h, full_path)
+                """INSERT INTO tracks(path, title, artist, album, ext, size, duration, md5, cover_path, source) 
+                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    target,
+                    meta["title"],
+                    meta["artist"],
+                    meta["album"],
+                    ext,
+                    size,
+                    meta["duration"],
+                    h,
+                    meta["cover_path"],
+                    full_path,
+                )
             )
             copied += 1
-            progress_cb(("copied", copied))
+            progress_cb(("copied", copied, total))
         except Exception as e:
             print(f"save error: {e}")
             errors += 1
@@ -282,7 +382,12 @@ def scan_and_collect(db_path, dst_dir, progress_cb):
 # UI
 # ---------------------------------------------------------------------------
 KV = """
-MDScreen:
+ScreenManager:
+    MainScreen:
+    ListScreen:
+
+<MainScreen>:
+    name: "main"
     MDBoxLayout:
         orientation: "vertical"
         padding: dp(8)
@@ -341,14 +446,35 @@ MDScreen:
             MDFlatButton:
                 text: "Список"
                 on_release: app.show_list()
+
+<ListScreen>:
+    name: "list"
+    MDBoxLayout:
+        orientation: "vertical"
+
+        MDTopAppBar:
+            title: "Библиотека"
+            left_action_items: [["arrow-left", lambda x: app.root.current = "main"]]
+
+        ScrollView:
+            MDList:
+                id: tracks_list
 """
+
+
+class MainScreen(Screen):
+    pass
+
+
+class ListScreen(Screen):
+    pass
 
 
 class MusicApp(MDApp):
     def build(self):
         self.theme_cls.theme_style = "Dark"
         self.theme_cls.primary_palette = "BlueGray"
-        self.db_path, self.dst_dir = get_app_dirs()
+        self.db_path, self.dst_dir, self.covers_dir = get_app_dirs()
         init_db(self.db_path)
         return Builder.load_string(KV)
 
@@ -356,7 +482,7 @@ class MusicApp(MDApp):
         Clock.schedule_once(lambda dt: request_perms(), 0.5)
         Clock.schedule_once(lambda dt: self.update_perms_label(), 1.5)
         Clock.schedule_once(
-            lambda dt: setattr(self.root.ids.path_label, "text",
+            lambda dt: setattr(self.root.get_screen("main").ids.path_label, "text",
                                f"Папка: {self.dst_dir}"), 2.0
         )
 
@@ -364,25 +490,29 @@ class MusicApp(MDApp):
         status = check_perms_status()
         audio = "OK" if status.get("audio") else "НЕТ"
         notif = "OK" if status.get("notif") else "НЕТ"
-        self.root.ids.perms_label.text = f"Аудио: {audio} | Увед: {notif}"
+        self.root.get_screen("main").ids.perms_label.text = f"Аудио: {audio} | Увед: {notif}"
 
     def start_scan(self):
-        self.root.ids.status_label.text = "Сканирование..."
-        self.root.ids.found_label.text = "Найдено: ..."
-        self.root.ids.copied_label.text = "Скопировано: ..."
+        main_screen = self.root.get_screen("main")
+        main_screen.ids.status_label.text = "Сканирование..."
+        main_screen.ids.found_label.text = "Найдено: ..."
+        main_screen.ids.copied_label.text = "Скопировано: ..."
+        main_screen.ids.dupes_label.text = "Дубликатов: ..."
 
         def progress(args):
-            kind, n = args
+            kind, n, total = args
             def upd(_):
                 if kind == "scanned":
-                    self.root.ids.found_label.text = f"Найдено: {n}"
+                    main_screen.ids.found_label.text = f"Найдено: {n}"
+                elif kind == "parsing":
+                    main_screen.ids.status_label.text = f"Обработка: {n}/{total}"
                 elif kind == "copied":
-                    self.root.ids.copied_label.text = f"Скопировано: {n}"
+                    main_screen.ids.copied_label.text = f"Скопировано: {n}/{total}"
             Clock.schedule_once(upd, 0)
 
         def worker():
             try:
-                stats = scan_and_collect(self.db_path, self.dst_dir, progress)
+                stats = scan_and_collect(self.db_path, self.dst_dir, self.covers_dir, progress)
                 Clock.schedule_once(lambda dt: self._done(stats), 0)
             except Exception:
                 err = traceback.format_exc()
@@ -397,13 +527,15 @@ class MusicApp(MDApp):
         threading.Thread(target=worker, daemon=True).start()
 
     def _done(self, stats):
-        self.root.ids.status_label.text = (
-            f"Готово! Скопировано: {stats['copied']}, "
-            f"дубликатов: {stats['dupes']}, ошибок: {stats['errors']}"
+        main_screen = self.root.get_screen("main")
+        main_screen.ids.status_label.text = "Готово!"
+        main_screen.ids.dupes_label.text = (
+            f"Дубликатов: {stats['dupes']}, ошибок: {stats['errors']}"
         )
 
     def _fail(self, err):
-        self.root.ids.status_label.text = "ОШИБКА! Нажми 'Ошибка'"
+        main_screen = self.root.get_screen("main")
+        main_screen.ids.status_label.text = "ОШИБКА! Нажми 'Ошибка'"
         self._last_error = err
 
     def show_error(self):
@@ -430,15 +562,36 @@ class MusicApp(MDApp):
         self._err_dialog.open()
 
     def show_list(self):
+        """Показывает список треков с метаданными."""
+        list_screen = self.root.get_screen("list")
+        tracks_list = list_screen.ids.tracks_list
+        tracks_list.clear_widgets()
+
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-        c.execute("SELECT title, ext FROM tracks ORDER BY title LIMIT 15")
+        c.execute("SELECT title, artist, album, duration, cover_path FROM tracks ORDER BY title")
         rows = c.fetchall()
         conn.close()
-        items = [f"{r[0]}{r[1]}" for r in rows]
-        self.root.ids.status_label.text = (
-            "Треки: " + " | ".join(items) if items else "База пуста"
-        )
+
+        if not rows:
+            tracks_list.add_widget(OneLineAvatarListItem(text="База пуста"))
+        else:
+            for title, artist, album, duration, cover_path in rows:
+                # Форматируем длительность
+                if duration > 0:
+                    mins = duration // 60
+                    secs = duration % 60
+                    duration_str = f"{mins}:{secs:02d}"
+                else:
+                    duration_str = "??:??"
+
+                item = TwoLineListItem(
+                    text=title,
+                    secondary_text=f"{artist} • {album} • {duration_str}"
+                )
+                tracks_list.add_widget(item)
+
+        self.root.current = "list"
 
 
 if __name__ == "__main__":
