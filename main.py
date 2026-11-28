@@ -1,16 +1,17 @@
 from kivy.lang import Builder
 from kivymd.app import MDApp
 from kivymd.uix.dialog import MDDialog
-from kivymd.uix.button import MDFlatButton
+from kivymd.uix.button import MDFlatButton, MDIconButton
 from kivymd.uix.list import MDList, TwoLineListItem
 from kivy.uix.screenmanager import ScreenManager, Screen
+from kivy.core.audio import SoundLoader
+from kivy.clock import Clock
+from kivy.utils import platform
 import sqlite3
 import os
 import hashlib
 import threading
 import traceback
-from kivy.clock import Clock
-from kivy.utils import platform
 
 # ---------------------------------------------------------------------------
 # Пути и константы
@@ -434,6 +435,56 @@ ScreenManager:
         ScrollView:
             MDList:
                 id: tracks_list
+
+        # Мини-плеер внизу
+        MDCard:
+            size_hint_y: None
+            height: dp(100)
+            padding: dp(8)
+            radius: [dp(16), dp(16), 0, 0]
+            elevation: 8
+
+            MDBoxLayout:
+                orientation: "vertical"
+                spacing: dp(4)
+
+                MDLabel:
+                    id: now_playing_label
+                    text: "Не играет"
+                    halign: "center"
+                    theme_text_color: "Primary"
+                    font_style: "Caption"
+
+                MDSlider:
+                    id: progress_slider
+                    min: 0
+                    max: 100
+                    value: 0
+                    size_hint_y: None
+                    height: dp(30)
+
+                MDBoxLayout:
+                    orientation: "horizontal"
+                    spacing: dp(8)
+                    adaptive_width: True
+                    pos_hint: {"center_x": 0.5}
+
+                    MDIconButton:
+                        icon: "skip-previous"
+                        on_release: app.prev_track()
+
+                    MDIconButton:
+                        id: play_pause_btn
+                        icon: "play"
+                        on_release: app.toggle_play_pause()
+
+                    MDIconButton:
+                        icon: "skip-next"
+                        on_release: app.next_track()
+
+                    MDIconButton:
+                        icon: "stop"
+                        on_release: app.stop_track()
 """
 
 
@@ -451,6 +502,18 @@ class MusicApp(MDApp):
         self.theme_cls.primary_palette = "BlueGray"
         self.db_path, self.dst_dir, self.covers_dir = get_app_dirs()
         init_db(self.db_path)
+
+        # Состояние плеера
+        self.sound = None
+        self.current_track_id = None
+        self.current_track_path = None
+        self.track_queue = []  # список ID треков
+        self.queue_index = -1
+        self.is_playing = False
+
+        # Запуск обновления прогресса
+        Clock.schedule_interval(self.update_progress, 1.0)
+
         return Builder.load_string(KV)
 
     def on_start(self):
@@ -462,7 +525,6 @@ class MusicApp(MDApp):
         )
 
     def go_main(self):
-        """Переход на главный экран (вызывается из KV)."""
         self.root.current = "main"
 
     def update_perms_label(self):
@@ -547,9 +609,11 @@ class MusicApp(MDApp):
 
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
-        c.execute("SELECT title, artist, album, duration, cover_path FROM tracks ORDER BY title")
+        c.execute("SELECT id, title, artist, album, duration, cover_path, path FROM tracks ORDER BY title")
         rows = c.fetchall()
         conn.close()
+
+        self.track_queue = [row[0] for row in rows]  # сохраняем очередь ID
 
         if not rows:
             item = TwoLineListItem(
@@ -558,7 +622,7 @@ class MusicApp(MDApp):
             )
             tracks_list.add_widget(item)
         else:
-            for title, artist, album, duration, cover_path in rows:
+            for track_id, title, artist, album, duration, cover_path, path in rows:
                 if duration > 0:
                     mins = duration // 60
                     secs = duration % 60
@@ -570,9 +634,117 @@ class MusicApp(MDApp):
                     text=title,
                     secondary_text=f"{artist} • {album} • {duration_str}"
                 )
+                # Привязываем нажатие к воспроизведению
+                item.bind(on_release=lambda x, tid=track_id: self.play_track(tid))
                 tracks_list.add_widget(item)
 
         self.root.current = "list"
+
+    # ---------------------------------------------------------------------------
+    # Воспроизведение
+    # ---------------------------------------------------------------------------
+    def play_track(self, track_id):
+        """Воспроизводит трек по ID."""
+        conn = sqlite3.connect(self.db_path)
+        c = conn.cursor()
+        c.execute("SELECT path, title, artist FROM tracks WHERE id=?", (track_id,))
+        row = c.fetchone()
+        conn.close()
+
+        if not row:
+            print(f"Track {track_id} not found")
+            return
+
+        path, title, artist = row
+
+        # Останавливаем текущее воспроизведение
+        if self.sound:
+            self.sound.stop()
+            self.sound.unload()
+
+        # Загружаем новый трек
+        self.sound = SoundLoader.load(path)
+        if self.sound is None:
+            print(f"Failed to load: {path}")
+            return
+
+        self.current_track_id = track_id
+        self.current_track_path = path
+        self.sound.play()
+        self.is_playing = True
+
+        # Обновляем UI
+        list_screen = self.root.get_screen("list")
+        list_screen.ids.now_playing_label.text = f"♪ {title} — {artist}"
+        list_screen.ids.play_pause_btn.icon = "pause"
+
+        # Устанавливаем максимальное значение слайдера
+        if self.sound.length > 0:
+            list_screen.ids.progress_slider.max = self.sound.length
+
+        print(f"Playing: {title} by {artist}")
+
+    def toggle_play_pause(self):
+        """Переключение Play/Pause."""
+        if not self.sound:
+            return
+
+        if self.is_playing:
+            self.sound.pause()
+            self.is_playing = False
+            list_screen = self.root.get_screen("list")
+            list_screen.ids.play_pause_btn.icon = "play"
+        else:
+            self.sound.play()
+            self.is_playing = True
+            list_screen = self.root.get_screen("list")
+            list_screen.ids.play_pause_btn.icon = "pause"
+
+    def stop_track(self):
+        """Остановка воспроизведения."""
+        if self.sound:
+            self.sound.stop()
+            self.sound.unload()
+            self.sound = None
+
+        self.is_playing = False
+        self.current_track_id = None
+
+        list_screen = self.root.get_screen("list")
+        list_screen.ids.now_playing_label.text = "Не играет"
+        list_screen.ids.play_pause_btn.icon = "play"
+        list_screen.ids.progress_slider.value = 0
+
+    def next_track(self):
+        """Следующий трек."""
+        if not self.track_queue or self.current_track_id is None:
+            return
+
+        self.queue_index = self.track_queue.index(self.current_track_id)
+        if self.queue_index < len(self.track_queue) - 1:
+            self.queue_index += 1
+            self.play_track(self.track_queue[self.queue_index])
+
+    def prev_track(self):
+        """Предыдущий трек."""
+        if not self.track_queue or self.current_track_id is None:
+            return
+
+        self.queue_index = self.track_queue.index(self.current_track_id)
+        if self.queue_index > 0:
+            self.queue_index -= 1
+            self.play_track(self.track_queue[self.queue_index])
+
+    def update_progress(self, dt):
+        """Обновление прогресс-бара каждую секунду."""
+        if self.sound and self.is_playing:
+            list_screen = self.root.get_screen("list")
+            current_pos = self.sound.get_pos()
+            list_screen.ids.progress_slider.value = current_pos
+
+            # Автоматический переход к следующему треку
+            if current_pos >= self.sound.length - 0.5:
+                self.next_track()
 
 
 if __name__ == "__main__":
