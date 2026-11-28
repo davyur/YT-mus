@@ -2,11 +2,19 @@ from kivy.lang import Builder
 from kivymd.app import MDApp
 from kivymd.uix.dialog import MDDialog
 from kivymd.uix.button import MDFlatButton
-from kivymd.uix.list import MDList, TwoLineListItem
+from kivymd.uix.list import TwoLineListItem
+from kivy.uix.recycleview import RecycleView
+from kivy.uix.recycleboxlayout import RecycleBoxLayout
+from kivymd.uix.boxlayout import MDBoxLayout
+from kivy.uix.behaviors import FocusBehavior
+from kivy.uix.recycleview.layout import LayoutSelectionBehavior
 from kivy.uix.screenmanager import ScreenManager, Screen
 from kivy.core.audio import SoundLoader
 from kivy.clock import Clock
 from kivy.utils import platform
+from kivy.metrics import dp
+from kivy.uix.label import Label
+from kivy.uix.image import Image
 import sqlite3
 import os
 import hashlib
@@ -20,7 +28,6 @@ import random
 SUPPORTED_EXTENSIONS = {".mp3", ".m4a", ".flac", ".wav", ".ogg", ".aac", ".wma"}
 ERROR_LOG = "/data/data/org.davyur.ytmus/files/error.log"
 
-# Режимы воспроизведения
 REPEAT_OFF = 0
 REPEAT_ALL = 1
 REPEAT_ONE = 2
@@ -56,7 +63,6 @@ def get_app_dirs():
         os.makedirs(dst, exist_ok=True)
         os.makedirs(covers, exist_ok=True)
 
-        print(f"DB: {db}\nDST: {dst}\nCOVERS: {covers}")
         return db, dst, covers
     except Exception as e:
         print(f"get_app_dirs error: {e}")
@@ -113,7 +119,6 @@ def parse_metadata(file_path):
 
     try:
         from mutagen import File as MutagenFile
-
         audio = MutagenFile(file_path)
         if audio is None:
             return result
@@ -222,12 +227,9 @@ def scan_via_os_walk():
 
     music_dir = "/storage/emulated/0/Music"
     if not os.path.exists(music_dir):
-        print(f"Папка {music_dir} не существует")
         return []
 
-    print(f"Сканируем {music_dir}...")
     files = []
-
     for root, dirs, filenames in os.walk(music_dir):
         for filename in filenames:
             ext = os.path.splitext(filename)[1].lower()
@@ -235,19 +237,14 @@ def scan_via_os_walk():
                 full_path = os.path.join(root, filename)
                 files.append((full_path, filename, ext))
 
-    print(f"os.walk нашёл {len(files)} файлов")
     return files
 
 
-# ---------------------------------------------------------------------------
-# Утилиты
-# ---------------------------------------------------------------------------
 def read_file(path):
     try:
         with open(path, "rb") as f:
             return f.read()
-    except Exception as e:
-        print(f"read error {path}: {e}")
+    except Exception:
         return None
 
 
@@ -281,15 +278,10 @@ def safe_target(dst_dir, name):
     return candidate
 
 
-# ---------------------------------------------------------------------------
-# Основная функция сканирования
-# ---------------------------------------------------------------------------
 def scan_and_collect(db_path, dst_dir, covers_dir, progress_cb):
     init_db(db_path)
-
     os.makedirs(dst_dir, exist_ok=True)
     os.makedirs(covers_dir, exist_ok=True)
-    print(f"Папка назначения: {dst_dir}")
 
     all_files = scan_via_os_walk()
     progress_cb(("scanned", len(all_files), "total"))
@@ -337,18 +329,8 @@ def scan_and_collect(db_path, dst_dir, covers_dir, progress_cb):
             c.execute(
                 """INSERT INTO tracks(path, title, artist, album, ext, size, duration, md5, cover_path, source) 
                    VALUES (?,?,?,?,?,?,?,?,?,?)""",
-                (
-                    target,
-                    meta["title"],
-                    meta["artist"],
-                    meta["album"],
-                    ext,
-                    size,
-                    meta["duration"],
-                    h,
-                    meta["cover_path"],
-                    full_path,
-                )
+                (target, meta["title"], meta["artist"], meta["album"], ext, size,
+                 meta["duration"], h, meta["cover_path"], full_path)
             )
             copied += 1
             progress_cb(("copied", copied, total))
@@ -359,6 +341,135 @@ def scan_and_collect(db_path, dst_dir, covers_dir, progress_cb):
     conn.commit()
     conn.close()
     return {"copied": copied, "dupes": skipped_dupes, "errors": errors}
+
+
+# ---------------------------------------------------------------------------
+# ОПТИМИЗАЦИЯ: RecycleView для списка треков
+# ---------------------------------------------------------------------------
+class SelectableRecycleBoxLayout(FocusBehavior, LayoutSelectionBehavior, RecycleBoxLayout):
+    """Добавляет выделение и навигацию с клавиатуры."""
+    pass
+
+
+class TrackRow(MDBoxLayout):
+    """Один элемент списка — переиспользуется RecycleView."""
+    
+    def __init__(self, **kwargs):
+        super().__init__(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(64),
+            padding=dp(8),
+            spacing=dp(8),
+            **kwargs
+        )
+        # Обложка (заглушка)
+        self.cover = Image(
+            size_hint=(None, None),
+            size=(dp(48), dp(48)),
+            allow_stretch=True,
+            keep_ratio=True,
+        )
+        self.cover.color = (0.3, 0.3, 0.3, 1)  # серый фон
+        self.add_widget(self.cover)
+
+        # Текст
+        text_box = MDBoxLayout(orientation="vertical", spacing=dp(2))
+        self.title_label = Label(
+            halign="left",
+            valign="middle",
+            font_size="14sp",
+            color=(1, 1, 1, 1),
+        )
+        self.subtitle_label = Label(
+            halign="left",
+            valign="middle",
+            font_size="11sp",
+            color=(0.7, 0.7, 0.7, 1),
+        )
+        text_box.add_widget(self.title_label)
+        text_box.add_widget(self.subtitle_label)
+        self.add_widget(text_box)
+
+        # Длительность справа
+        self.duration_label = Label(
+            halign="right",
+            valign="middle",
+            font_size="12sp",
+            color=(0.6, 0.6, 0.6, 1),
+            size_hint_x=None,
+            width=dp(50),
+        )
+        self.add_widget(self.duration_label)
+
+        # Данные трека (заполняются через refresh_view_attrs)
+        self.track_id = None
+        self.app_ref = None
+
+    def refresh_view_attrs(self, rv, index, data):
+        """Вызывается RecycleView при переиспользовании виджета."""
+        super().refresh_view_attrs(rv, index, data)
+        self.track_id = data.get('track_id')
+        self.title_label.text = data.get('title', '')
+        self.subtitle_label.text = data.get('subtitle', '')
+        self.duration_label.text = data.get('duration', '')
+
+        # Загрузка обложки
+        cover_path = data.get('cover_path', '')
+        if cover_path and os.path.exists(cover_path):
+            self.cover.source = cover_path
+            self.cover.color = (1, 1, 1, 1)
+        else:
+            self.cover.source = ''
+            self.cover.color = (0.3, 0.3, 0.3, 1)
+
+    def on_touch_down(self, touch):
+        """Обработка нажатия на строку."""
+        if self.collide_point(*touch.pos) and self.track_id is not None:
+            if self.app_ref:
+                self.app_ref.play_track(self.track_id)
+            return True
+        return super().on_touch_down(touch)
+
+
+class OptimizedTrackList(RecycleView):
+    """Быстрый список треков с виртуализацией."""
+    
+    def __init__(self, app_ref, **kwargs):
+        super().__init__(**kwargs)
+        self.app_ref = app_ref
+        self.viewclass = TrackRow
+        self.data = []
+        
+        self.layout = SelectableRecycleBoxLayout(
+            default_size=(None, dp(64)),
+            default_size_hint=(1, None),
+            size_hint_y=None,
+            orientation='vertical',
+            multiselect=False,
+            touch_multiselect=False,
+        )
+        self.layout.bind(minimum_height=self.layout.setter('height'))
+        self.add_widget(self.layout)
+
+    def load_tracks(self, tracks_data):
+        """Загружает данные треков в RecycleView."""
+        self.data = []
+        for track_id, title, artist, album, duration, cover_path in tracks_data:
+            if duration > 0:
+                mins = duration // 60
+                secs = duration % 60
+                duration_str = f"{mins}:{secs:02d}"
+            else:
+                duration_str = "--:--"
+
+            self.data.append({
+                'track_id': track_id,
+                'title': title,
+                'subtitle': f"{artist} • {album}",
+                'duration': duration_str,
+                'cover_path': cover_path or '',
+            })
 
 
 # ---------------------------------------------------------------------------
@@ -438,10 +549,11 @@ ScreenManager:
         MDTopAppBar:
             title: "Библиотека"
             left_action_items: [["arrow-left", lambda x: app.go_main()]]
+            right_action_items: [["refresh", lambda x: app.refresh_list()]]
 
-        ScrollView:
-            MDList:
-                id: tracks_list
+        # Быстрый RecycleView вместо MDList
+        OptimizedTrackList:
+            id: track_list
 
         # Мини-плеер внизу
         MDCard:
@@ -495,7 +607,7 @@ ScreenManager:
 
                     MDIconButton:
                         id: mode_btn
-                        icon: "repeat"
+                        icon: "repeat-off"
                         on_release: app.cycle_mode()
 """
 
@@ -519,10 +631,13 @@ class MusicApp(MDApp):
         self.sound = None
         self.current_track_id = None
         self.current_track_path = None
-        self.track_queue = []  # список ID треков
+        self.track_queue = []
         self.queue_index = -1
         self.is_playing = False
-        self.play_mode = REPEAT_OFF  # режим воспроизведения
+        self.play_mode = REPEAT_OFF
+
+        # Регистрируем кастомный виджет RecycleView
+        Builder.load_string(KV)
 
         # Запуск обновления прогресса
         Clock.schedule_interval(self.update_progress, 1.0)
@@ -575,7 +690,6 @@ class MusicApp(MDApp):
                         f.write(err)
                 except Exception:
                     pass
-                print(err)
                 Clock.schedule_once(lambda dt: self._fail(err), 0)
 
         threading.Thread(target=worker, daemon=True).start()
@@ -607,57 +721,52 @@ class MusicApp(MDApp):
             title="Трассировка ошибки",
             text=err[-1500:],
             buttons=[
-                MDFlatButton(
-                    text="Закрыть",
-                    on_release=lambda _: self._err_dialog.dismiss()
-                ),
+                MDFlatButton(text="Закрыть", on_release=lambda _: self._err_dialog.dismiss()),
             ],
         )
         self._err_dialog.open()
 
     def show_list(self):
+        """Быстрая загрузка списка через RecycleView."""
         list_screen = self.root.get_screen("list")
-        tracks_list = list_screen.ids.tracks_list
-        tracks_list.clear_widgets()
+        track_list = list_screen.ids.track_list
+        
+        # Устанавливаем ссылку на приложение для обработки нажатий
+        track_list.app_ref = self
 
-        conn = sqlite3.connect(self.db_path)
-        c = conn.cursor()
-        c.execute("SELECT id, title, artist, album, duration, cover_path, path FROM tracks ORDER BY title")
-        rows = c.fetchall()
-        conn.close()
+        # Загружаем данные из БД в отдельном потоке (если много треков)
+        def load_from_db():
+            conn = sqlite3.connect(self.db_path)
+            c = conn.cursor()
+            c.execute("SELECT id, title, artist, album, duration, cover_path FROM tracks ORDER BY title")
+            rows = c.fetchall()
+            conn.close()
+            return rows
 
-        self.track_queue = [row[0] for row in rows]
+        def update_ui(rows):
+            self.track_queue = [row[0] for row in rows]
+            track_list.load_tracks(rows)
+            self.update_mode_icon()
 
-        if not rows:
-            item = TwoLineListItem(
-                text="База пуста",
-                secondary_text="Нажмите 'Сканировать'"
-            )
-            tracks_list.add_widget(item)
+        # Для небольшого количества треков — сразу, для большого — в потоке
+        if len(self.track_queue) > 100:
+            threading.Thread(target=lambda: Clock.schedule_once(
+                lambda dt: update_ui(load_from_db()), 0
+            ), daemon=True).start()
         else:
-            for track_id, title, artist, album, duration, cover_path, path in rows:
-                if duration > 0:
-                    mins = duration // 60
-                    secs = duration % 60
-                    duration_str = f"{mins}:{secs:02d}"
-                else:
-                    duration_str = "??:??"
-
-                item = TwoLineListItem(
-                    text=title,
-                    secondary_text=f"{artist} • {album} • {duration_str}"
-                )
-                item.bind(on_release=lambda x, tid=track_id: self.play_track(tid))
-                tracks_list.add_widget(item)
+            rows = load_from_db()
+            update_ui(rows)
 
         self.root.current = "list"
-        self.update_mode_icon()
+
+    def refresh_list(self):
+        """Обновить список (кнопка refresh в toolbar)."""
+        self.show_list()
 
     # ---------------------------------------------------------------------------
     # Воспроизведение
     # ---------------------------------------------------------------------------
     def play_track(self, track_id):
-        """Воспроизводит трек по ID."""
         conn = sqlite3.connect(self.db_path)
         c = conn.cursor()
         c.execute("SELECT path, title, artist FROM tracks WHERE id=?", (track_id,))
@@ -665,17 +774,14 @@ class MusicApp(MDApp):
         conn.close()
 
         if not row:
-            print(f"Track {track_id} not found")
             return
 
         path, title, artist = row
 
-        # Останавливаем текущее воспроизведение
         if self.sound:
             self.sound.stop()
             self.sound.unload()
 
-        # Загружаем новый трек
         self.sound = SoundLoader.load(path)
         if self.sound is None:
             print(f"Failed to load: {path}")
@@ -684,42 +790,33 @@ class MusicApp(MDApp):
         self.current_track_id = track_id
         self.current_track_path = path
         
-        # Обновляем queue_index
         if track_id in self.track_queue:
             self.queue_index = self.track_queue.index(track_id)
         
         self.sound.play()
         self.is_playing = True
 
-        # Обновляем UI
         list_screen = self.root.get_screen("list")
         list_screen.ids.now_playing_label.text = f"♪ {title} — {artist}"
         list_screen.ids.play_pause_btn.icon = "pause"
 
-        # Устанавливаем максимальное значение слайдера
         if self.sound.length > 0:
             list_screen.ids.progress_slider.max = self.sound.length
 
-        print(f"Playing: {title} by {artist}")
-
     def toggle_play_pause(self):
-        """Переключение Play/Pause."""
         if not self.sound:
             return
 
         if self.is_playing:
             self.sound.pause()
             self.is_playing = False
-            list_screen = self.root.get_screen("list")
-            list_screen.ids.play_pause_btn.icon = "play"
+            self.root.get_screen("list").ids.play_pause_btn.icon = "play"
         else:
             self.sound.play()
             self.is_playing = True
-            list_screen = self.root.get_screen("list")
-            list_screen.ids.play_pause_btn.icon = "pause"
+            self.root.get_screen("list").ids.play_pause_btn.icon = "pause"
 
     def stop_track(self):
-        """Остановка воспроизведения."""
         if self.sound:
             self.sound.stop()
             self.sound.unload()
@@ -734,18 +831,15 @@ class MusicApp(MDApp):
         list_screen.ids.progress_slider.value = 0
 
     def next_track(self):
-        """Следующий трек с учётом режима."""
         if not self.track_queue:
             return
 
         if self.play_mode == REPEAT_ONE:
-            # Повтор текущего трека
             if self.current_track_id:
                 self.play_track(self.current_track_id)
             return
 
         if self.play_mode == SHUFFLE:
-            # Случайный трек
             if len(self.track_queue) > 1:
                 next_id = random.choice(self.track_queue)
                 while next_id == self.current_track_id and len(self.track_queue) > 1:
@@ -753,7 +847,6 @@ class MusicApp(MDApp):
                 self.play_track(next_id)
             return
 
-        # REPEAT_OFF или REPEAT_ALL
         if self.queue_index < 0:
             self.queue_index = 0
         elif self.queue_index < len(self.track_queue) - 1:
@@ -761,27 +854,22 @@ class MusicApp(MDApp):
         elif self.play_mode == REPEAT_ALL:
             self.queue_index = 0
         else:
-            # REPEAT_OFF и конец списка
             self.stop_track()
             return
 
         self.play_track(self.track_queue[self.queue_index])
 
     def prev_track(self):
-        """Предыдущий трек."""
         if not self.track_queue or self.queue_index <= 0:
             return
-
         self.queue_index -= 1
         self.play_track(self.track_queue[self.queue_index])
 
     def cycle_mode(self):
-        """Переключение режимов воспроизведения."""
         self.play_mode = (self.play_mode + 1) % 4
         self.update_mode_icon()
 
     def update_mode_icon(self):
-        """Обновляет иконку режима."""
         list_screen = self.root.get_screen("list")
         mode_icons = {
             REPEAT_OFF: "repeat-off",
@@ -792,13 +880,11 @@ class MusicApp(MDApp):
         list_screen.ids.mode_btn.icon = mode_icons.get(self.play_mode, "repeat-off")
 
     def update_progress(self, dt):
-        """Обновление прогресс-бара каждую секунду."""
         if self.sound and self.is_playing:
             list_screen = self.root.get_screen("list")
             current_pos = self.sound.get_pos()
             list_screen.ids.progress_slider.value = current_pos
 
-            # Автоматический переход к следующему треку
             if current_pos >= self.sound.length - 0.5:
                 self.next_track()
 
