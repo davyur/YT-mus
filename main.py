@@ -391,7 +391,9 @@ class MusicApp(MDApp):
         self.root.ids.found_label.text = "Найдено: ..."
         self.root.ids.copied_label.text = "Скопировано: ..."
 
-        def progress(kind, n):
+        # ИСПРАВЛЕНО: progress принимает кортеж одним аргументом
+        def progress(args):
+            kind, n = args
             def upd(_):
                 if kind == "scanned":
                     self.root.ids.found_label.text = f"Найдено: {n}"
@@ -405,7 +407,6 @@ class MusicApp(MDApp):
                 Clock.schedule_once(lambda dt: self._done(stats), 0)
             except Exception:
                 err = traceback.format_exc()
-                # Сохраняем полный traceback в файл
                 try:
                     with open(ERROR_LOG, "w", encoding="utf-8") as f:
                         f.write(err)
@@ -429,7 +430,6 @@ class MusicApp(MDApp):
     def show_error(self):
         err = getattr(self, "_last_error", None)
         if not err:
-            # Читаем из файла
             try:
                 with open(ERROR_LOG, "r", encoding="utf-8") as f:
                     err = f.read()
@@ -440,7 +440,7 @@ class MusicApp(MDApp):
             self._err_dialog.dismiss()
         self._err_dialog = MDDialog(
             title="Трассировка ошибки",
-            text=err[-1500:],  # последние 1500 символов
+            text=err[-1500:],
             buttons=[
                 MDFlatButton(
                     text="Закрыть",
