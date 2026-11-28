@@ -5,7 +5,7 @@ package.domain = org.davyur
 source.dir = .
 source.include_exts = py,png,jpg,kv,atlas,mp3,m4a,flac,wav,ogg,aac,wma,json,txt,ttf
 version = 1.1.0
-requirements = hostpython3==3.11.9,python3==3.11.9,kivy==2.3.0,kivymd==1.2.0,pyjnius
+requirements = hostpython3==3.11.9,python3==3.11.9,kivy==2.3.0,kivymd==1.2.0,pyjnius,mutagen
 orientation = portrait
 android.permissions = READ_MEDIA_AUDIO,POST_NOTIFICATIONS,WAKE_LOCK
 android.minapi = 21
